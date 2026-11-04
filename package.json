@@ -1,0 +1,15 @@
+{
+  "name": "fling-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "3D low-poly physics sandbox: fling things and dummies, TNT, guns, destructible blocks.",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=iife --outfile=game.bundle.js",
+    "dev": "esbuild src/main.js --bundle --format=iife --outfile=game.bundle.js --watch"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0",
+    "three": "0.170.0",
+    "cannon-es": "0.20.0"
+  }
+}
