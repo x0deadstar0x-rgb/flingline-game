@@ -140,6 +140,7 @@ function renderSettings(body) {
   row('Field of view', 'How wide you can see.', slider('fov', 60, 100, 1, (v) => `${v}°`));
   row('Volume', 'M mutes everything.', slider('volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
   row('Graphics', 'Low turns off shadows and lowers resolution (much faster). Also L.', choice('quality', [['high', 'High'], ['low', 'Low']]));
+  row('Theme', 'Light or dark menus.', choice('theme', [['dark', 'Dark'], ['light', 'Light']]));
   row('Time of day', 'Night makes explosions and lamps glow.', choice('time', [['day', 'Day'], ['sunset', 'Sunset'], ['night', 'Night']]));
   const reset = document.createElement('button');
   reset.className = 'sreset';
@@ -237,7 +238,7 @@ export function updateHud(dt) {
   frames++; fpsT += dt;
   if (fpsT > 0.5) { fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
   const s = G.stats;
-  $('stats').innerHTML = `<div class="row"><span>BOOMS</span><b>${s.booms}</b><span>BROKEN</span><b>${s.destroyed}</b><span>FLUNG</span><b>${s.flings}</b><span>BEST</span><b>${s.best.toFixed(1)}m</b></div>` +
+  $('stats').innerHTML = `<div class="row"><span>BOOMS</span><b>${s.booms}</b><span>BROKEN</span><b>${s.destroyed}</b><span>FLUNG</span><b>${s.flings}</b><span>BEST</span><b>${s.best.toFixed(1)}m</b><span>KOS</span><b>${s.kos || 0}</b></div>` +
     `<div class="dim">${G.map ? G.map.name.toUpperCase() : ''} · ${G.ents.size} OBJECTS · ${fps} FPS${G.timeScale < 1 ? ' · SLOW-MO' : ''}${G.player && G.player.flying ? ' · FLYING' : ''}</div>`;
   $('crosshair').className = G.crossHint || '';
   $('toolnote').textContent = G.toolNote || '';

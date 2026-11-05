@@ -112,6 +112,23 @@ export const CATALOG = [
     { t: 'box', size: [1.8, 0.35, 0.7], off: [0, -0.25, 0], tex: 'concrete' },
     { t: 'box', size: [1.8, 0.55, 0.3], off: [0, 0.2, 0], tex: 'concrete' }] }),
   B('hay', 'Hay Bale', '🌾', 'Build', { shape: 'box', size: [1.2, 0.8, 0.8], mat: 'hay', tex: 'hay' }),
+  // Blocks (2 m blocks keep big builds cheap: fewer bodies, still breakable into pieces)
+  B('wood_big', 'Big Wood Block', '🟫', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'wood', tex: 'plank' }),
+  B('stone_big', 'Big Stone Block', '🪨', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'stone', tex: 'stone' }),
+  B('brick_big', 'Big Brick Block', '🧱', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'brick', tex: 'brick' }),
+  B('brick_long', 'Long Brick', '🧱', 'Blocks', { shape: 'box', size: [2, 1, 1], mat: 'brick', tex: 'brick' }),
+  B('sand_block', 'Sandstone Block', '🟨', 'Blocks', { shape: 'box', size: [1, 1, 1], mat: 'stone', tex: 'stone', color: 0xe8cf94 }),
+  B('sand_big', 'Big Sandstone Block', '🟨', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'stone', tex: 'stone', color: 0xe8cf94 }),
+  B('marble', 'Marble Block', '⬜', 'Blocks', { shape: 'box', size: [1, 1, 1], mat: 'stone', tex: 'stone', color: 0xf6f3ec }),
+  B('marble_big', 'Big Marble Block', '⬜', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'stone', tex: 'stone', color: 0xf6f3ec }),
+  B('pillar', 'Marble Pillar', '🏛️', 'Blocks', { shape: 'cyl', r: 0.4, h: 3, mat: 'stone', tex: 'stone', color: 0xf6f3ec }),
+  B('obsidian', 'Obsidian Block', '⬛', 'Blocks', { shape: 'box', size: [1, 1, 1], mat: 'rock', tex: 'stone', color: 0x3a2f4f }),
+  B('ice_big', 'Big Ice Block', '🧊', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'ice' }),
+  B('glass_big', 'Big Glass Block', '🪟', 'Blocks', { shape: 'box', size: [2, 2, 2], mat: 'glass', hp: 40 }), // thick glass: holds a tower up, still shatters
+  B('wood_wall', 'Wood Wall Panel', '🚪', 'Blocks', { shape: 'box', size: [2, 2, 0.25], mat: 'wood', tex: 'plank' }),
+  B('steel_plate', 'Steel Plate', '▭', 'Blocks', { shape: 'box', size: [2, 0.15, 2], mat: 'metal', tex: 'metal' }),
+  B('rubber_block', 'Bouncy Block', '🟥', 'Blocks', { shape: 'box', size: [1, 1, 1], mat: 'rubber', color: 0xff3b6b }),
+  B('foam_block', 'Foam Block', '🟪', 'Blocks', { shape: 'box', size: [1, 1, 1], mat: 'foam' }),
   // Explosives
   B('tnt', 'TNT', '🧨', 'Boom', { shape: 'box', size: [0.9, 0.9, 0.9], mat: 'tnt', tex: 'tnt', explosive: { power: 1, impact: 17, hp: 1 } }),
   B('tnt_mini', 'Mini TNT', '🧨', 'Boom', { shape: 'box', size: [0.5, 0.5, 0.5], mat: 'tnt', tex: 'tnt', explosive: { power: 0.5, impact: 17, hp: 1 } }),
@@ -250,6 +267,13 @@ export const CATALOG = [
   B('pf_stairs', 'Crate Stairs', '🪜', 'Prefabs', { prefab: 'stairs' }),
   B('pf_igloo', 'Igloo', '🛖', 'Prefabs', { prefab: 'igloo' }),
   B('pf_snowman', 'Snowman', '⛄', 'Prefabs', { prefab: 'snowman' }),
+  // Big structures (made of 2 m blocks)
+  B('pf_castle', 'Stone Castle', '🏰', 'Big Builds', { prefab: 'castle' }),
+  B('pf_bigtower', 'Big Brick Tower', '🗼', 'Big Builds', { prefab: 'bigtower' }),
+  B('pf_bigpyramid', 'Sandstone Pyramid', '🔺', 'Big Builds', { prefab: 'bigpyramid' }),
+  B('pf_greatwall', 'Great Wall', '🧱', 'Big Builds', { prefab: 'greatwall' }),
+  B('pf_colosseum', 'Colosseum', '🏟️', 'Big Builds', { prefab: 'colosseum' }),
+  B('pf_glasstower', 'Glass Tower', '🏙️', 'Big Builds', { prefab: 'glasstower' }),
 ];
 export const ITEMS = Object.fromEntries(CATALOG.map((d) => [d.id, d]));
 ITEMS.pin = { id: 'pin', name: 'Pin', shape: 'cyl', r: 0.13, rt: 0.08, h: 0.8, mat: 'plastic', color: 0xffffff };
@@ -445,6 +469,8 @@ export function breakEnt(ent, dir, extra = 0) {
   const color = (def.splat ?? (ent.mesh.material?.color?.getHex?.() ?? mat.color));
   G.stats.destroyed++;
   if (G.debugBreaks) G.debugBreaks.push(def.id + '@' + pos.toArray().map((v) => v.toFixed(1)).join(','));
+  // remember ropes / welds on this object so they can move to the pieces
+  const keep = attachmentsOf(ent.body);
   removeEnt(ent);
   const brk = ent.frozen ? 'shards' : mat.brk;
   if (brk === 'shards') {
@@ -496,6 +522,7 @@ export function breakEnt(ent, dir, extra = 0) {
       pieces.push({ def: pd, pos: pos.clone().add(off), off, quat: _q.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...(p.rot || [0, 0, 0])))) });
     }
   }
+  const made = [];
   for (const p of pieces) {
     const out = p.off.clone().normalize().multiplyScalar(rand(1, 3) + extra);
     if (dir) out.addScaledVector(dir, 2 + extra * 0.5);
@@ -505,6 +532,44 @@ export function breakEnt(ent, dir, extra = 0) {
       gen: ent.gen + 1, spawned: true,
     });
     pe.hp = Math.max(8, (mat.hp === Infinity ? 100 : mat.hp) * 0.5 ** (ent.gen + 1));
+    made.push(pe);
+  }
+  reattach(keep, made);
+}
+
+// ropes / welds attached to a body, with their world anchor points
+function attachmentsOf(body) {
+  const out = { ropes: [], welds: [] };
+  for (const r of G.ropes) {
+    if (r.a === body) out.ropes.push({ r, side: 'a', wp: tv(body.pointToWorldFrame(r.la)) });
+    else if (r.b === body) out.ropes.push({ r, side: 'b', wp: tv(body.pointToWorldFrame(r.lb)) });
+  }
+  for (const w of G.welds) {
+    if (w.bodyA === body) out.welds.push({ other: w.bodyB });
+    else if (w.bodyB === body) out.welds.push({ other: w.bodyA });
+  }
+  return out;
+}
+// when something breaks, its ropes and welds hold on to the nearest piece instead of vanishing
+function reattach(keep, pieces) {
+  if (!pieces.length || (!keep.ropes.length && !keep.welds.length)) return;
+  const nearest = (p) => {
+    let best = null, bd = 1e9;
+    for (const pe of pieces) { const d = tv(pe.body.position).distanceTo(p); if (d < bd) { bd = d; best = pe; } }
+    return best;
+  };
+  for (const { r, side, wp } of keep.ropes) {
+    const pe = nearest(wp);
+    const other = side === 'a' ? r.b : r.a;
+    if (!G.world.bodies.includes(other)) continue;
+    const local = pe.body.pointToLocalFrame(new CANNON.Vec3(wp.x, wp.y, wp.z));
+    if (side === 'a') addRope(pe.body, local, other, r.lb, r.len, r.strand.mat.color.getHex());
+    else addRope(other, r.la, pe.body, local, r.len, r.strand.mat.color.getHex());
+  }
+  for (const { other } of keep.welds) {
+    if (!G.world.bodies.includes(other)) continue;
+    const op = tv(other.position);
+    addWeld(nearest(op).body, other);
   }
 }
 
@@ -604,7 +669,7 @@ export function explode(pos, power = 1, opts = {}) {
   for (const [e, f, dir] of hitEnts) {
     if (e.dead) continue;
     if ((opts.fire && f > 0.15) || (f > 0.5 && Math.random() < 0.3 && !opts.quiet)) ignite(e, 8);
-    if (e.kind === 'ragpart') { e.dummy.hurt(f * 60, dir); continue; }
+    if (e.kind === 'ragpart') { if (e.partName === 'torso') e.dummy.hurt(f * 115 * Math.sqrt(power), dir); continue; }
     if (e.def.explosive) { detonate(e, rand(0.08, 0.22)); continue; }
     const dmg = 140 * Math.sqrt(power) * f;
     if (e.hp !== Infinity && e.hp - dmg <= 0) breakEnt(e, dir, V * f * 0.4);
@@ -690,8 +755,16 @@ function velAt(body, wp, out) {
   return out;
 }
 // Called on every physics sub-step.
+const ROPE_SWING_DAMP = 0.35;   // 1/s, sideways damping of a taut rope
+const BALLOON_ACC = 2.2;        // m/s² upward for a free balloon
+const BALLOON_VMAX = 3.5;       // free balloon rise speed (m/s)
+const BALLOON_VMAX_TIED = 5;    // balloons lifting something
+const BALLOON_DRAG = Math.exp(-0.9 / 60);
+const tiedSet = new Set();
 export function physicsForces() {
   const g = 9.82;
+  tiedSet.clear();
+  for (const r of G.ropes) { tiedSet.add(r.a); tiedSet.add(r.b); }
   for (let i = G.ropes.length - 1; i >= 0; i--) {
     const r = G.ropes[i];
     r.a.pointToWorldFrame(r.la, _pa);
@@ -708,8 +781,11 @@ export function physicsForces() {
     const me = Math.min(ma, mb, 400);
     const F = Math.min(me * (300 * (d - r.len) + 25 * vrel), me * 600);
     if (F <= 0) continue;
-    if (ma < 1e9) { r.a.applyForce(new CANNON.Vec3(_f.x * F, _f.y * F, _f.z * F), _pa.vsub(r.a.position)); r.a.wakeUp(); }
-    if (mb < 1e9) { r.b.applyForce(new CANNON.Vec3(-_f.x * F, -_f.y * F, -_f.z * F), _pb.vsub(r.b.position)); r.b.wakeUp(); }
+    // taut rope: also damp sideways swinging a little so things don't orbit forever
+    const tx = (_vb.x - _va.x) - _f.x * vrel, ty = (_vb.y - _va.y) - _f.y * vrel, tz = (_vb.z - _va.z) - _f.z * vrel;
+    const C = me * ROPE_SWING_DAMP;
+    if (ma < 1e9) { r.a.applyForce(new CANNON.Vec3(_f.x * F + tx * C, _f.y * F + ty * C, _f.z * F + tz * C), _pa.vsub(r.a.position)); r.a.wakeUp(); }
+    if (mb < 1e9) { r.b.applyForce(new CANNON.Vec3(-_f.x * F - tx * C, -_f.y * F - ty * C, -_f.z * F - tz * C), _pb.vsub(r.b.position)); r.b.wakeUp(); }
   }
   for (const e of G.ents) {
     const b = e.body;
@@ -724,8 +800,16 @@ export function physicsForces() {
       b.angularVelocity.scale(1 - 0.02 * sub, b.angularVelocity);
     }
     if (e.def && e.def.special === 'balloon') {
-      b.applyForce(new CANNON.Vec3(0, b.mass * g + (e.lift ?? 14), 0));
-      b.velocity.scale(0.985, b.velocity);
+      // a free balloon drifts up gently; a tied one pulls with its full lift.
+      // Lift fades out near the top speed so nothing rockets into the sky.
+      const tied = tiedSet.has(b);
+      const lift = tied ? (e.lift ?? 14) : Math.min(e.lift ?? 14, b.mass * BALLOON_ACC);
+      const vmax = tied ? BALLOON_VMAX_TIED : BALLOON_VMAX;
+      const fade = clamp((vmax - b.velocity.y) / 1.5, 0, 1);
+      b.applyForce(new CANNON.Vec3(0, b.mass * g + lift * fade, 0));
+      // air drag (exact per step so it is stable for very light balloons)
+      b.velocity.scale(BALLOON_DRAG, b.velocity);
+      b.angularVelocity.scale(0.97, b.angularVelocity);
     }
     if (e.antigrav > 0) {
       b.applyForce(new CANNON.Vec3(0, b.mass * g * 1.12, 0));
@@ -885,6 +969,123 @@ function yawed(base, x, y, z, yaw) {
 }
 function yq(yaw) { return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw); }
 
+// Big builds. put(id, x, y, z, extra): local x = right, local +z = away from you, y = up.
+// 2 m blocks sit on layers at y = 1 + layer * 2.004 (tiny gaps so the stack settles calmly).
+const LY = (l) => 1 + l * 2.004;
+const BIG = {
+  castle(put, yaw) {
+    const n = 7, h = (n - 1) / 2, Z = 10; // 7 x 7 blocks around, centred 10 m in front of you
+    for (let l = 0; l < 3; l++) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      if (i > 0 && i < n - 1 && j > 0 && j < n - 1) continue; // hollow inside
+      if (j === 0 && i === 3) continue; // gate in the wall facing you
+      put('stone_big', (i - h) * 2.01, LY(l), Z + (j - h) * 2.01);
+    }
+    // corner towers
+    for (const [i, j] of [[0, 0], [n - 1, 0], [0, n - 1], [n - 1, n - 1]]) for (let l = 3; l < 5; l++) put('stone_big', (i - h) * 2.01, LY(l), Z + (j - h) * 2.01);
+    // battlements
+    for (let i = 1; i < n - 1; i += 2) for (const j of [0, n - 1]) {
+      if (!(j === 0 && i === 3)) put('stone', (i - h) * 2.01, LY(3) - 0.5, Z + (j - h) * 2.01);
+      put('stone', (j - h) * 2.01, LY(3) - 0.5, Z + (i - h) * 2.01);
+    }
+  },
+  bigtower(put) {
+    const Z = 5;
+    for (let l = 0; l < 9; l++) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      if (i === 1 && j === 1) continue;
+      put('brick_big', (i - 1) * 2.01, LY(l), Z + (j - 1) * 2.01);
+    }
+  },
+  bigpyramid(put) {
+    const Z = 7;
+    for (let l = 0; l < 5; l++) {
+      const m = 5 - l, h = (m - 1) / 2;
+      for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) put('sand_big', (i - h) * 2.01, LY(l), Z + (j - h) * 2.01);
+    }
+  },
+  greatwall(put) {
+    const Z = 5, n = 10, h = (n - 1) / 2;
+    for (let l = 0; l < 3; l++) for (let i = 0; i < n; i++) put('stone_big', (i - h) * 2.01, LY(l), Z);
+    for (let i = 0; i < n; i += 2) put('stone', (i - h) * 2.01, LY(3) - 0.5, Z);
+  },
+  colosseum(put, yaw) {
+    // R is wide enough that neighbouring blocks don't touch at their inner corners
+    const Z = 13, R = 9.6, n = 26;
+    for (let l = 0; l < 3; l++) for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2;
+      if (i === 0 || i === n / 2) continue; // two entrances
+      put(l === 2 ? 'marble_big' : 'sand_big', Math.sin(a) * R, LY(l), Z - Math.cos(a) * R, { quat: yq(yaw - a) });
+    }
+  },
+  glasstower(put) {
+    const Z = 4;
+    for (let f = 0; f < 4; f++) {
+      const y0 = f * (4.008 + 0.152);
+      for (let l = 0; l < 2; l++) for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) put('glass_big', (i - 0.5) * 2.01, y0 + LY(l), Z + (j - 0.5) * 2.01);
+      for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) put('steel_plate', (i - 0.5) * 2.01, y0 + 4.008 + 0.075, Z + (j - 0.5) * 2.01);
+    }
+  },
+};
+
+export const isBigBuild = (kind) => !!BIG[kind];
+
+// Dry run of a big build: where every block would go (no bodies made).
+function planBig(kind, pos, yaw) {
+  const out = [];
+  BIG[kind]((id, x, y, z) => {
+    const d = ITEMS[id];
+    const half = d.size ? Math.max(d.size[0], d.size[2]) / 2 : d.r;
+    out.push({ x, y, z, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
+  }, yaw, pos, {});
+  return out;
+}
+
+// Can this big build go here? Finds the ground height under it and checks for
+// map objects (trees, walls, ramps...) that would sit inside its blocks.
+// Returns { ok, reason, y, corners } — corners = footprint outline in world space.
+export function checkBig(kind, pos, yaw) {
+  const plan = planBig(kind, pos, yaw);
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const b of plan) { x0 = Math.min(x0, b.x - b.half); x1 = Math.max(x1, b.x + b.half); z0 = Math.min(z0, b.z - b.half); z1 = Math.max(z1, b.z + b.half); }
+  const corners = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => yawed(pos, x, 0, z, yaw));
+  // ground under the footprint
+  let lo = 1e9, hi = -1e9, miss = 0, hiProp = false;
+  const N = 5;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const w = yawed(pos, x0 + (x1 - x0) * i / (N - 1), 0, z0 + (z1 - z0) * j / (N - 1), yaw);
+    const h = raycastStatic(new THREE.Vector3(w.x, pos.y + 25, w.z), new THREE.Vector3(w.x, pos.y - 60, w.z));
+    if (!h || h.point.y < G.waterY) { miss++; continue; }
+    lo = Math.min(lo, h.point.y);
+    if (h.point.y > hi) { hi = h.point.y; hiProp = !h.body.shapes.some((sh) => sh instanceof CANNON.Heightfield); }
+  }
+  const res = { ok: true, reason: '', y: hi > -1e8 ? hi : pos.y, corners };
+  for (const c of corners) c.y = res.y + 0.06;
+  if (miss > 2) return { ...res, ok: false, reason: 'Needs solid ground (no gaps or water)' };
+  if (hi - lo > 1.3) return { ...res, ok: false, reason: hiProp ? 'Something is in the way — find clear ground' : 'Ground too bumpy here — find a flatter spot' };
+  // map objects inside the blocks (the ground itself is fine)
+  const base = new THREE.Vector3(pos.x, res.y, pos.z);
+  const boxes = planBig(kind, base, yaw).map((b) => ({ x: b.w.x, y: b.w.y, z: b.w.z, r: b.half * 0.9, hy: b.hy * 0.9 }));
+  for (const body of G.world.bodies) {
+    const big = body.type !== CANNON.Body.DYNAMIC ? !body.shapes.some((sh) => sh instanceof CANNON.Heightfield) : body.mass > 250; // heavy things (incl. blocks of another big build)
+    if (!big || body.isPlayer) continue;
+    if (body.aabbNeedsUpdate) body.updateAABB();
+    const a = body.aabb;
+    // skip flat floor slabs we are standing on top of
+    if (a.upperBound.y <= res.y + 0.15) continue;
+    for (const b of boxes) {
+      if (a.lowerBound.x < b.x + b.r && a.upperBound.x > b.x - b.r && a.lowerBound.z < b.z + b.r && a.upperBound.z > b.z - b.r && a.lowerBound.y < b.y + b.hy && a.upperBound.y > b.y - b.hy) {
+        return { ...res, ok: false, reason: 'Something is in the way — find clear ground' };
+      }
+    }
+  }
+  return res;
+}
+const _rrS = new CANNON.RaycastResult();
+function raycastStatic(from, to) {
+  _rrS.reset();
+  G.world.raycastClosest(new CANNON.Vec3(from.x, from.y, from.z), new CANNON.Vec3(to.x, to.y, to.z), { collisionFilterMask: GROUP.STATIC, skipBackfaces: true }, _rrS);
+  return _rrS.hasHit ? { point: tv(_rrS.hitPointWorld), body: _rrS.body } : null;
+}
+
 export function buildPrefab(kind, pos, yaw = 0, spawned = true, sleep = false) {
   const o = { spawned, sleep, quat: yq(yaw) };
   const put = (id, x, y, z, extra = {}) => createEnt(ITEMS[id], yawed(pos, x, y, z, yaw), { ...o, ...extra });
@@ -962,6 +1163,8 @@ export function buildPrefab(kind, pos, yaw = 0, spawned = true, sleep = false) {
     const c = createEnt(ball(0.36), yawed(pos, 0, 2.82, 0, yaw), o);
     const nose = createEnt({ id: 'carrot', shape: 'cyl', r: 0.07, rt: 0.01, h: 0.35, mat: 'fruit', color: 0xff7b00, splat: 0xff7b00 }, yawed(pos, 0, 2.82, 0.45, yaw), { ...o, quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, yaw, 0, 'YXZ')) });
     addWeld(a.body, b.body); addWeld(b.body, c.body); addWeld(c.body, nose.body);
+  } else if (BIG[kind]) {
+    BIG[kind](put, yaw, pos, o);
   } else if (kind === 'pallets') {
     for (let i = 0; i < 5; i++) put('pallet', 0, 0.15 + i * 0.31, 0);
   } else if (kind === 'ballpit') {

@@ -18,6 +18,23 @@ let snap = null; // quick retract animation after a throw
 const trails = []; // thrown things leave a short streak
 const cLoose = new THREE.Color(0xffffff), cTight = new THREE.Color(0xff4a4a);
 const tmpC = new THREE.Color();
+const _tq = new THREE.Quaternion(), _cq = new THREE.Quaternion(), _eq = new THREE.Quaternion(), _yq = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0);
+// target world orientation = your facing (yaw) * the orientation you set
+function holdQ(g, out) {
+  _yq.setFromAxisAngle(UP, G.player ? G.player.yaw : 0);
+  return out.copy(_yq).multiply(g.rel);
+}
+// R + mouse: turn the held object (left/right around up, up/down around your right side)
+export function rotateHeld(dx, dy) {
+  const g = G.grab;
+  if (!g || g.dummy) return false;
+  const qa = new THREE.Quaternion().setFromAxisAngle(UP, dx * 1.6);
+  const qb = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 1.6);
+  g.rel.premultiply(qb).premultiply(qa).normalize();
+  g.body.wakeUp();
+  return true;
+}
 
 function target() {
   return G.aim.start.clone().addScaledVector(G.aim.dir, G.grab.dist);
@@ -44,8 +61,23 @@ function grabForce() {
   const maxF = 9000;
   if (f > maxF) { const s = maxF / f; fx *= s; fy *= s; fz *= s; }
   b.applyForce(new CANNON.Vec3(fx, fy, fz), _r);
-  b.angularVelocity.scale(0.985, b.angularVelocity);
-  if (g.spin) b.angularVelocity.y += 0.6;
+  if (g.dummy) { b.angularVelocity.scale(0.985, b.angularVelocity); }
+  else {
+    // hold the object's orientation (relative to where you face); R + mouse turns it
+    holdQ(g, _tq);
+    _cq.copy(b.quaternion);
+    _eq.copy(_tq).multiply(_cq.invert());
+    if (_eq.w < 0) { _eq.x = -_eq.x; _eq.y = -_eq.y; _eq.z = -_eq.z; _eq.w = -_eq.w; }
+    const s = Math.sqrt(1 - Math.min(1, _eq.w * _eq.w));
+    const ang = 2 * Math.acos(Math.min(1, _eq.w));
+    const kq = 12; // how fast it settles into the held orientation (1/s)
+    const ax = s > 1e-4 ? _eq.x / s : 0, ay = s > 1e-4 ? _eq.y / s : 0, az = s > 1e-4 ? _eq.z / s : 0;
+    const w = b.angularVelocity;
+    const blend = 0.35;
+    w.x += (ax * ang * kq - w.x) * blend;
+    w.y += (ay * ang * kq - w.y) * blend;
+    w.z += (az * ang * kq - w.z) * blend;
+  }
   g.tension = clamp(f / maxF, 0, 1) * 0.5 + clamp(Math.hypot(t.x - _wp.x, t.y - _wp.y, t.z - _wp.z) / 4, 0, 1) * 0.5;
 }
 
@@ -79,7 +111,9 @@ function tryGrab() {
   }
   G.grab = {
     body, local, dummy: d, dist: clamp(hit.point.distanceTo(G.aim.start), HOLD_MIN, HOLD_MAX),
-    target: new THREE.Vector3(), tension: 0, spin: false, oldAngDamp: body.angularDamping,
+    target: new THREE.Vector3(), tension: 0, oldAngDamp: body.angularDamping,
+    // orientation relative to your facing, so it turns with you
+    rel: new THREE.Quaternion().setFromAxisAngle(UP, -(G.player ? G.player.yaw : 0)).multiply(new THREE.Quaternion(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)),
   };
   body.wakeUp();
   body.angularDamping = 0.4;
@@ -129,17 +163,18 @@ export function updateGrabFx(dt) {
 
 export const grabTools = [{
   id: 'fling', name: 'Fling Line', icon: '✋', color: 0xffffff,
-  hint: 'Click: grab / drop · F: THROW · Z/X: shorter/longer line · R: spin',
+  hint: 'Click: grab / drop · F: THROW · Z/X: shorter/longer line · hold R + mouse: rotate',
   down() { if (G.grab) release(); else tryGrab(); },
   unequip() { release(false); },
   update(dt, input) {
     if (!strand) strand = new Strand(0xffffff, 0.022, 16, true);
     const g = G.grab;
     G.crossHint = null;
+    G.toolNote = null;
     if (g) {
       if (input.held('KeyZ')) g.dist = Math.max(HOLD_MIN, g.dist - dt * 8);
       if (input.held('KeyX')) g.dist = Math.min(HOLD_MAX, g.dist + dt * 8);
-      g.spin = input.held('KeyR');
+      G.toolNote = input.held('KeyR') && !g.dummy ? 'Rotating — move the mouse' : null;
       if (input.tap('KeyF')) { throwIt(); return; }
       g.target.copy(target());
       const wp = tv(g.body.pointToWorldFrame(g.local));

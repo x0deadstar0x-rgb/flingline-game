@@ -66,7 +66,7 @@ G.extraForces.push(() => {
 
 export const rayTools = [
   {
-    id: 'push', name: 'Force Push', icon: '💨', color: 0xe0f7ff, hint: 'Click: shockwave cone. Aim at your feet to rocket-jump!',
+    id: 'push', name: 'Force Push', icon: '💨', color: 0xe0f7ff, hint: 'Click: shockwave cone that also pushes you backwards. Aim at your feet to rocket-jump!',
     down() {
       if (this.cd > 0) return; this.cd = 0.5;
       sfx.push();
@@ -76,11 +76,17 @@ export const rayTools = [
         const v = dir.clone().add(new THREE.Vector3(rand(-0.35, 0.35), rand(-0.35, 0.35), rand(-0.35, 0.35))).normalize().multiplyScalar(rand(18, 28));
         FX.particle({ pos: hand, vel: v, color: 0xe0f7ff, size: rand(0.2, 0.4), life: 0.4, glow: true, add: false, opacity: 0.5, gravity: 0, drag: 3, grow: 2, shrink: false });
       }
+      // recoil: the blast pushes YOU the opposite way you're looking (any direction)
+      const pv = G.player.body.velocity;
+      const RECOIL = 13;
+      pv.x -= dir.x * RECOIL; pv.z -= dir.z * RECOIL;
       if (G.player.pitch < -1.0) {
-        G.player.body.velocity.y = 17;
-        G.player.stun = 0.2;
+        // looking at your feet: the big rocket-jump
+        pv.y = Math.max(pv.y, 17);
         FX.smoke(G.player.feet(), 8, 0xffffff, 0.6);
-      }
+      } else if (dir.y < 0) pv.y = Math.max(pv.y, -dir.y * RECOIL + 2);
+      else pv.y -= dir.y * RECOIL * 0.6;
+      G.player.stun = Math.max(G.player.stun, 0.3);
       for (const d of dummiesNear(hand, 16)) {
         const to = d.center().sub(hand); const len = to.length();
         if (to.dot(dir) / len < 0.75) continue;

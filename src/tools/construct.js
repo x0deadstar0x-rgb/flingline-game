@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, rand, toast, tv, popup } from '../core.js';
-import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand, makeGhost } from '../items.js';
+import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand, makeGhost, isBigBuild, checkBig } from '../items.js';
 import { spawnDummy } from '../dummy.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
@@ -21,6 +21,24 @@ function showMarker(p, color) {
   marker.visible = !!p;
   if (p) { marker.position.copy(p).add(new THREE.Vector3(0, 0.03, 0)); marker.material.color.set(color); marker.rotation.z += 0.05; }
 }
+
+// footprint outline for big builds: white = fits, red = blocked
+let outline = null;
+function showOutline(corners, ok) {
+  if (!outline) {
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(5 * 3), 3));
+    outline = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
+    outline.renderOrder = 15; outline.frustumCulled = false;
+    G.scene.add(outline);
+  }
+  outline.visible = !!corners;
+  if (!corners) return;
+  const a = outline.geometry.attributes.position;
+  for (let i = 0; i < 5; i++) { const c = corners[i % 4]; a.setXYZ(i, c.x, c.y, c.z); }
+  a.needsUpdate = true;
+  outline.material.color.set(ok ? 0xffffff : 0xff4040);
+}
+function bigKind(def) { return def && def.prefab && isBigBuild(def.prefab) ? def.prefab : null; }
 
 // two-click tools (rope / weld) share this
 function pickAnchor() {
@@ -69,6 +87,12 @@ export const buildTools = [
     down() {
       if (this.cd > 0) return; this.cd = 0.2;
       const { def, p, yaw, quat } = this.placement();
+      const bk = bigKind(def);
+      if (bk) {
+        const c = checkBig(bk, p, yaw);
+        if (!c.ok) { toast(c.reason); return; }
+        p.y = c.y;
+      }
       // remember what this click made so U can undo it
       const beforeE = new Set(G.ents), beforeD = new Set(G.dummies);
       if (def.dummy || def.prefab) spawnItem(def, p, { spawned: true, yaw });
@@ -87,8 +111,16 @@ export const buildTools = [
         G.spawnId = list[(i + 1) % list.length].id;
         toast(`Spawner: ${ITEMS[G.spawnId].name}`);
       }
-      const { def, p, quat, ground } = this.placement();
+      const { def, p, quat, ground, yaw } = this.placement();
       showMarker(ground, 0xffffff);
+      const bk = bigKind(def);
+      if (bk) {
+        // re-check a few times a second (it raycasts the whole footprint)
+        this.bigT = (this.bigT || 0) - dt;
+        if (this.bigT <= 0 || this.bigId !== G.spawnId) { this.bigT = 0.2; this.bigId = G.spawnId; this.big = checkBig(bk, p, yaw); }
+        showOutline(this.big.corners, this.big.ok);
+        G.toolNote = this.big.ok ? 'Fits here — click to build' : this.big.reason;
+      } else { showOutline(null); if (this.bigId) { this.bigId = null; G.toolNote = null; } }
       // ghost preview for single items
       if (this.ghostId !== G.spawnId) {
         if (this.ghost) G.scene.remove(this.ghost);
@@ -98,7 +130,7 @@ export const buildTools = [
       }
       if (this.ghost) { this.ghost.visible = true; this.ghost.position.copy(p); this.ghost.quaternion.copy(quat); }
     },
-    unequip() { showMarker(null); if (this.ghost) this.ghost.visible = false; },
+    unequip() { showMarker(null); showOutline(null); this.bigId = null; G.toolNote = null; if (this.ghost) this.ghost.visible = false; },
   },
   {
     id: 'eraser', name: 'Eraser', icon: '🧽', color: 0xff5c8a, hint: 'Click: delete an object or dummy',
