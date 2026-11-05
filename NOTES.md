@@ -28,5 +28,5 @@ three.js render, cannon-es physics, first person only, single click + keyboard c
 - Fixed old bug: a dummy knocked over before its first frame (Balloon Dummy always) became a ragdoll at the world origin instead of where it was spawned.
 
 ## Ideas / next
-- Dummies could react to being held (flail), sit on benches, or form groups.
-- Health/KO counts in the HUD stats (G.stats.kos exists).
+- Dummies could sit on benches, form groups, or pick up and throw things.
+- Big builds could get a see-through ghost preview of the whole structure (now only an outline).
