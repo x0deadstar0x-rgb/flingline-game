@@ -106,6 +106,7 @@ function tryGrab() {
   } else {
     const e = body.ent;
     if (e && e.frozen) unfreeze(e);
+    if (e && e.carriedBy) e.carriedBy.dropCarry(); // snatch it from a dummy carrying it
     if (body.type !== CANNON.Body.DYNAMIC) { toast("Can't grab that"); return; }
     local = body.pointToLocalFrame(new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z));
   }

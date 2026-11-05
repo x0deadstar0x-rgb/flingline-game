@@ -1031,12 +1031,30 @@ export const isBigBuild = (kind) => !!BIG[kind];
 // Dry run of a big build: where every block would go (no bodies made).
 function planBig(kind, pos, yaw) {
   const out = [];
-  BIG[kind]((id, x, y, z) => {
+  const inv = yq(-yaw);
+  BIG[kind]((id, x, y, z, extra = {}) => {
     const d = ITEMS[id];
     const half = d.size ? Math.max(d.size[0], d.size[2]) / 2 : d.r;
-    out.push({ x, y, z, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
+    // local rotation (the builders pass world rotations that already include yaw)
+    const lq = extra.quat ? inv.clone().multiply(extra.quat) : null;
+    out.push({ id, x, y, z, lq, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
   }, yaw, pos, {});
   return out;
+}
+
+// see-through copy of a whole big build, in local space (set the group's
+// position to the base point and rotation.y to the yaw to place it)
+const bigGhostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false });
+export function makeBigGhost(kind) {
+  const g = new THREE.Group();
+  for (const b of planBig(kind, new THREE.Vector3(), 0)) {
+    const m = new THREE.Mesh(makeGeo(ITEMS[b.id].shape, ITEMS[b.id]), bigGhostMat);
+    m.position.set(b.x, b.y, b.z);
+    if (b.lq) m.quaternion.copy(b.lq);
+    g.add(m);
+  }
+  g.userData.mat = bigGhostMat;
+  return g;
 }
 
 // Can this big build go here? Finds the ground height under it and checks for
