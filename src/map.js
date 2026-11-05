@@ -1,9 +1,9 @@
-// Maps: Island, Flatlands, Hills, Sky Islands. Static world, pads, water, sky.
+// Maps: static world, breakable terrain, pads, water, sky.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, GROUP, rand, clamp, tv } from './core.js';
 import { TEX } from './textures.js';
-import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope } from './items.js';
+import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope, addRope } from './items.js';
 import { spawnDummy } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
@@ -61,12 +61,13 @@ function scyl(r, h, x, y, z, color, tex = null, seg = 12) {
 }
 function deco(mesh, x, y, z) { mesh.position.set(x, y, z); mapGroup.add(mesh); return mesh; }
 
+let snowyTrees = false;
 const leafCols = [0x3f8f3a, 0x4fa34a, 0x2f7a32, 0x5cb85c];
 function tree(x, y, z, s = 1) {
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.32 * s, 2.2 * s, 6), smat(0x7a5230));
   trunk.castShadow = true;
   addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, trunk);
-  const c = leafCols[(r01() * leafCols.length) | 0];
+  const c = snowyTrees ? 0xeef4f8 : leafCols[(r01() * leafCols.length) | 0];
   for (let i = 0; i < 3; i++) {
     const cone = new THREE.Mesh(new THREE.ConeGeometry((1.6 - i * 0.4) * s, 1.6 * s, 7), smat(c));
     cone.castShadow = true;
@@ -148,28 +149,109 @@ function crowd(n, cx, cz, r, y = 0, variants = ['normal']) {
 }
 function pallets(x, y, z, n = 3) { for (let i = 0; i < n; i++) put('pallet', x + i * 2.0, y, z); }
 
+
+// ------------------------------------------------------------- breakable terrain
+// Every ground map is a heightfield. Explosions dig craters into it (physics + visuals).
+let T = null;
+const _c = new THREE.Color();
+function makeTerrain({ W, es, height, color, bedrock = -8 }) {
+  const n = Math.round(W / es) + 1;
+  const data = [];
+  for (let i = 0; i < n; i++) { const col = []; for (let j = 0; j < n; j++) col.push(height(-W / 2 + i * es, W / 2 - j * es)); data.push(col); }
+  const shape = new CANNON.Heightfield(data, { elementSize: es });
+  const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
+  body.addShape(shape);
+  body.position.set(-W / 2, 0, W / 2);
+  body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  G.world.addBody(body); mapBodies.push(body);
+  const geo = new THREE.PlaneGeometry(W, W, n - 1, n - 1);
+  geo.rotateX(-Math.PI / 2);
+  const cols = new Float32Array(n * n * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
+  mesh.receiveShadow = true;
+  mapGroup.add(mesh);
+  T = { W, es, n, data, shape, body, geo, mesh, color, bedrock, scar: new Float32Array(n * n) };
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) setVertex(i, j);
+  geo.computeBoundingSphere();
+  G.groundAt = groundHeight;
+}
+function setVertex(i, j) {
+  const { n, data, geo, W, es, color, scar } = T;
+  const k = (n - 1 - j) * n + i;
+  const h = data[i][j];
+  geo.attributes.position.setY(k, h);
+  const x = -W / 2 + i * es, z = W / 2 - j * es;
+  _c.set(color(h, x, z));
+  // tiny per-vertex shade variation for the low-poly look (stable per vertex)
+  _c.offsetHSL(0, 0, (((i * 73856093) ^ (j * 19349663)) % 100) / 100 * 0.05 - 0.025);
+  if (scar[k] > 0) _c.lerp(new THREE.Color(0x4a3524), Math.min(1, scar[k]));
+  geo.attributes.color.setXYZ(k, _c.r, _c.g, _c.b);
+}
+export function groundHeight(x, z) {
+  if (!T) return -1e9;
+  const { W, es, data, n } = T;
+  const fx = (x + W / 2) / es, fz = (W / 2 - z) / es;
+  if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return -1e9;
+  const i = clamp(Math.floor(fx), 0, n - 2), j = clamp(Math.floor(fz), 0, n - 2);
+  const tx = fx - i, tz = fz - j;
+  const a = data[i][j], b = data[i + 1][j], c = data[i][j + 1], d = data[i + 1][j + 1];
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+}
+// dig a crater. Called by explosions.
+export function crater(pos, r, depth) {
+  if (!T) return;
+  const g = groundHeight(pos.x, pos.z);
+  if (g < -1e8 || pos.y - g > r * 0.8) return; // explosion was in the air
+  const { W, es, n, data } = T;
+  const i0 = Math.max(0, Math.floor((pos.x - r * 1.3 + W / 2) / es)), i1 = Math.min(n - 1, Math.ceil((pos.x + r * 1.3 + W / 2) / es));
+  const j0 = Math.max(0, Math.floor((W / 2 - pos.z - r * 1.3) / es)), j1 = Math.min(n - 1, Math.ceil((W / 2 - pos.z + r * 1.3) / es));
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+    const x = -W / 2 + i * es, z = W / 2 - j * es;
+    const d = Math.hypot(x - pos.x, z - pos.z) / r;
+    const k = (n - 1 - j) * n + i;
+    if (d < 1) {
+      data[i][j] = Math.max(T.bedrock, data[i][j] - depth * (1 - d * d));
+      T.scar[k] = Math.min(1, T.scar[k] + (1 - d) * 1.5);
+    } else if (d < 1.3) {
+      data[i][j] += depth * 0.12 * (1 - (d - 1) / 0.3); // little rim of dirt
+      T.scar[k] = Math.min(1, T.scar[k] + 0.3);
+    } else continue;
+    setVertex(i, j);
+  }
+  T.shape.update();
+  T.shape.updateMinValue();
+  T.shape.updateMaxValue();
+  T.body.aabbNeedsUpdate = true;
+  T.geo.attributes.position.needsUpdate = true;
+  T.geo.attributes.color.needsUpdate = true;
+  FX.debris(new THREE.Vector3(pos.x, g + 0.3, pos.z), 0x5a4030, 14, 0.25, 9);
+}
+G.crater = (pos, power) => crater(pos, 2.2 * Math.pow(power, 0.55), 1.1 * Math.pow(power, 0.6));
+
+// ------------------------------------------------------------- shared building helpers
+function stack(id, x, y, z, w, d, h, size = 1) { // hollow box of blocks
+  for (let l = 0; l < h; l++) for (let a = 0; a < w; a++) for (let b = 0; b < d; b++) {
+    if (a > 0 && a < w - 1 && b > 0 && b < d - 1) continue;
+    createEnt(ITEMS[id], new THREE.Vector3(x + (a - (w - 1) / 2) * size * 1.005, y + size / 2 + l * size * 1.002, z + (b - (d - 1) / 2) * size * 1.005), {});
+  }
+}
+
 // ------------------------------------------------------------- maps
 function buildIsland() {
   srand(7);
-  G.waterY = -1;
-  // island block + beaches
-  const S = 140;
-  const ground = new THREE.Mesh(new THREE.BoxGeometry(S, 10, S, 1, 1, 1), [smat(0xe9d29a, 'sand', 12), smat(0xe9d29a, 'sand', 12), smat(0xffffff, 'grass', 14), smat(0xe9d29a, 'sand'), smat(0xe9d29a, 'sand', 12), smat(0xe9d29a, 'sand', 12)]);
-  ground.receiveShadow = true;
-  addStatic(new CANNON.Box(new CANNON.Vec3(S / 2, 5, S / 2)), new THREE.Vector3(0, -5, 0), null, ground);
-  const beachA = Math.atan2(4, 14);
-  for (const [x, z, ry] of [[S / 2 + 6.5, 0, 0], [-S / 2 - 6.5, 0, Math.PI], [0, S / 2 + 6.5, -Math.PI / 2], [0, -S / 2 - 6.5, Math.PI / 2]]) {
-    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, ry, -beachA, 'YXZ'));
-    const m = new THREE.Mesh(new THREE.BoxGeometry(15, 2, S + 26), smat(0xe9d29a, 'sand', 8));
-    m.receiveShadow = true;
-    addStatic(new CANNON.Box(new CANNON.Vec3(7.5, 1, S / 2 + 13)), new THREE.Vector3(x, -2.9, z), q, m);
-  }
-  addStatic(new CANNON.Plane(), new THREE.Vector3(0, -14, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)), null);
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), smat(0xc9b27a));
-  floor.rotation.x = -Math.PI / 2; deco(floor, 0, -14, 0);
+  makeTerrain({
+    W: 200, es: 2, bedrock: -9,
+    height: (x, z) => {
+      const e = Math.max(Math.abs(x), Math.abs(z)) + 0.15 * Math.min(Math.abs(x), Math.abs(z)) * 0;
+      if (e < 66) return 0;
+      if (e < 80) return -4.5 * (e - 66) / 14;
+      return -4.5 - (e - 80) * 0.4;
+    },
+    color: (h) => (h > -0.05 ? 0x5fae4a : h > -3.5 ? 0xe9d29a : 0xc9b27a),
+  });
   water1(-1);
-  zones = [[0, 34, 8], [-18, 10, 6], [24, -18, 9], [-26, -26, 6], [0, -34, 5], [-5, -8, 8], [14, 22, 10], [-34, 24, 7], [36, 32, 8], [44, -2, 8], [6, 14, 3], [-10, 30, 3]];
-
+  zones = [[0, 34, 8], [-18, 10, 6], [24, -18, 9], [-26, -26, 6], [0, -34, 5], [-5, -8, 8], [14, 22, 10], [-34, 24, 7], [36, 32, 8], [44, -2, 8], [6, 14, 3], [-10, 30, 3], [-45, -10, 6], [-45, 5, 5], [40, -45, 8]];
   sleepy(() => {
     buildPrefab('pyramid', new THREE.Vector3(-18, 0, 10), 0, false);
     // castle
@@ -179,37 +261,34 @@ function buildIsland() {
       let x, z;
       const t = i - (n - 1) / 2;
       if (side === 0) { x = t; z = -(n - 1) / 2; } else if (side === 1) { x = (n - 1) / 2; z = t; } else if (side === 2) { x = -t; z = (n - 1) / 2; } else { x = -(n - 1) / 2; z = -t; }
-      if (side === 2 && Math.abs(x) < 1 && l < 2) continue; // door
+      if (side === 2 && Math.abs(x) < 1 && l < 2) continue;
       createEnt(ITEMS.stone, new THREE.Vector3(cx + x * 1.01, 0.5 + l * 1.005, cz + z * 1.01), {});
     }
     for (const [x, z] of [[-3, -3], [3, -3], [3, 3], [-3, 3]]) for (let l = 3; l < 5; l++) createEnt(ITEMS.stone, new THREE.Vector3(cx + x * 1.01, 0.5 + l * 1.005, cz + z * 1.01), {});
-    // glass tower
     for (let f = 0; f < 3; f++) buildPrefab('glassroom', new THREE.Vector3(-26, f * 2.315, -26), 0, false);
     buildPrefab('jenga', new THREE.Vector3(0, 0, -34), 0, false);
-    // domino spiral
     for (let i = 0; i < 34; i++) {
       const a = i * 0.25, r = 2.5 + i * 0.17;
       createEnt(ITEMS.domino, new THREE.Vector3(-5 + Math.cos(a) * r, 0.6, -8 + Math.sin(a) * r), { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -a) });
     }
     buildPrefab('bowling', new THREE.Vector3(14, 0, 22), 0, false);
-    // TNT bunker
     buildPrefab('tntstack', new THREE.Vector3(-34, 0, 24), 0, false);
     for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; put('barrel', -34 + Math.cos(a) * 3.2, 0, 24 + Math.sin(a) * 3.2); }
+    buildPrefab('house', new THREE.Vector3(-45, 0, -10), 0, false);
+    buildPrefab('fort', new THREE.Vector3(40, 0, -45), 0, false);
+    buildPrefab('wall', new THREE.Vector3(-45, 0, 5), Math.PI / 2, false);
   });
   sbox(2.2, 0.1, 18, 14, 0.05, 18, 0xd9b77a, 'plank');
   for (const [x, z, w, d] of [[-34, 28.5, 9, 1], [-38.5, 24, 1, 9], [-29.5, 24, 1, 9]]) sbox(w, 2.5, d, x, 1.25, z, 0x8c9096, 'stone');
-  // watchtower with ramp
   for (const [x, z] of [[33.5, 29.5], [38.5, 29.5], [33.5, 34.5], [38.5, 34.5]]) sbox(0.6, 8, 0.6, x, 4, z, 0x7a5230, 'log');
   sbox(6, 0.5, 6, 36, 8.2, 32, 0xb07a3e, 'plank');
   sbox(3, 0.4, 17, 36, 4.1, 43, 0xb07a3e, 'plank', [-0.5, 0, 0]);
-  sleepy(() => { put('pallet', 35, 8.5, 31); put('pallet', 37, 8.5, 33.5); put('melon', 36, 8.5, 30); });
-  // big launch ramp
   sbox(6, 0.6, 14, 44, 2.2, -2, 0x9aa4ae, 'metal', [0.32, 0, 0]);
   pad(6, 0, 14, new THREE.Vector3(0, 24, 0));
   pad(-10, 0, 30, new THREE.Vector3(14, 20, -24), 0xffb703);
   pad(28, 0, 6, new THREE.Vector3(0, 30, 0));
-  // props
   sleepy(() => {
+    put('pallet', 35, 8.5, 31); put('melon', 36, 8.5, 33);
     pallets(-4, 0, 26, 4);
     put('car', 10, 0, 38, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.4) });
     put('table', -12, 0, 40); put('melon', -12.4, 0.9, 40); put('pumpkin', -11.5, 0.9, 40.2);
@@ -219,32 +298,22 @@ function buildIsland() {
     put('present', 2, 0, 20); put('crystal', -2, 0, 20);
     for (let i = 0; i < 5; i++) put('crate', 50 + rand(-4, 4), 0, 50 + rand(-4, 4));
     put('nuke', -55, 0, -55);
-    buildPrefab('tower', new THREE.Vector3(-45, 0, -10), 0, false);
-    buildPrefab('wall', new THREE.Vector3(-45, 0, 5), Math.PI / 2, false);
   });
-  for (let i = 0; i < 70; i++) { const x = rr(-66, 66), z = rr(-66, 66); if (free(x, z, 3)) { tree(x, 0, z, rr(0.8, 1.4)); zones.push([x, z, 2]); } }
-  for (let i = 0; i < 25; i++) { const x = rr(-66, 66), z = rr(-66, 66); if (free(x, z, 2)) rock(x, 0.2, z, rr(0.6, 1.6)); }
+  for (let i = 0; i < 70; i++) { const x = rr(-62, 62), z = rr(-62, 62); if (free(x, z, 3)) { tree(x, 0, z, rr(0.8, 1.4)); zones.push([x, z, 2]); } }
+  for (let i = 0; i < 25; i++) { const x = rr(-62, 62), z = rr(-62, 62); if (free(x, z, 2)) rock(x, 0.2, z, rr(0.6, 1.6)); }
   crowd(9, 0, 5, 18); crowd(2, -24, -18, 3, 0, ['tiny']); crowd(1, 24, -18, 1.5, 0, ['big']); crowd(2, 36, 32, 1, 8.5);
 }
 
 function buildFlat() {
   srand(11);
-  G.waterY = -1000;
-  const S = 500;
-  const g = new THREE.Mesh(new THREE.BoxGeometry(S, 2, S), smat(0xffffff, 'grass', 50));
-  g.receiveShadow = true;
-  addStatic(new CANNON.Box(new CANNON.Vec3(S / 2, 1, S / 2)), new THREE.Vector3(0, -1, 0), null, g);
+  makeTerrain({ W: 300, es: 3, height: () => 0, color: (h, x, z) => ((Math.floor(x / 15) + Math.floor(z / 15)) & 1 ? 0x63b34d : 0x5aa646), bedrock: -6 });
   zones = [[0, 34, 8]];
-  // stunt park: ramps of increasing steepness
   for (let i = 0; i < 4; i++) sbox(5, 0.5, 12, 30 + i * 9, 1.6 + i * 0.6, 10, [0x3a86ff, 0xff006e, 0xffbe0b, 0x8338ec][i], null, [0.22 + i * 0.1, 0, 0]);
-  // half pipe
   sbox(20, 0.5, 6, 45, 1.5, -20, 0x9aa4ae, 'metal', [0, 0, 0], 2);
   sbox(20, 0.5, 6, 45, 3, -24.5, 0x9aa4ae, 'metal', [0.7, 0, 0], 2);
   sbox(20, 0.5, 6, 45, 3, -15.5, 0x9aa4ae, 'metal', [-0.7, 0, 0], 2);
-  // stairs to nowhere
   for (let i = 0; i < 12; i++) sbox(4, 0.5, 1.2, -40, 0.25 + i * 0.5, -10 - i * 1.2, 0xd8cfc4, 'stone');
   sbox(4, 0.5, 4, -40, 6, -25.5, 0xd8cfc4, 'stone');
-  // sky platforms with launch pads hopping between them
   const plats = [[0, 0, 10], [0, 16, -40], [22, 32, -70], [-18, 48, -100], [0, 64, -132]];
   for (let i = 1; i < plats.length; i++) {
     const [x, y, z] = plats[i];
@@ -254,110 +323,62 @@ function buildFlat() {
   }
   for (let i = 0; i < plats.length - 1; i++) {
     const [x, y, z] = plats[i], [nx, ny, nz] = plats[i + 1];
-    const d = new THREE.Vector3(nx - x, 0, nz - z);
-    const T = 2.2;
-    const v = new THREE.Vector3(d.x / T, (ny - y + 0.5 * 9.82 * T * T) / T, d.z / T);
+    const Tt = 2.2;
+    const v = new THREE.Vector3((nx - x) / Tt, (ny - y + 0.5 * 9.82 * Tt * Tt) / Tt, (nz - z) / Tt);
     pad(x + (i === 0 ? 0 : 2), y, z + (i === 0 ? 0 : 2), v, 0xffb703);
   }
   sleepy(() => {
-    for (let i = 1; i < plats.length; i++) { const [x, y, z] = plats[i]; put('pallet', x - 2.5, y, z - 2); put('pallet_big', x - 1, y, z + 2.5); }
+    for (let i = 1; i < plats.length; i++) { const [x, y, z] = plats[i]; put('pallet', x - 2.5, y, z - 2); put('crate', x + 2, y, z + 2); }
     for (let i = 0; i < 60; i++) createEnt(ITEMS.domino, new THREE.Vector3(-10, 0.6, 20 - i * 0.75), {});
-    for (const [x, z] of [[-60, -40], [-66, -40], [-60, -46], [-66, -46]]) for (let l = 0; l < 7; l++) for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) createEnt(ITEMS.crate, new THREE.Vector3(x + a * 1.01, 0.5 + l * 1.001, z + b * 1.01), {});
+    buildPrefab('skyscraper', new THREE.Vector3(-63, 0, -43), 0, false);
+    buildPrefab('skyscraper', new THREE.Vector3(-63, 0, -60), 0, false);
     for (let i = 0; i < 5; i++) for (let j = 0; j < 4; j++) put('tnt', -70 + i * 3, 0, 20 + j * 3);
     for (let i = 0; i < 6; i++) put('barrel', -72 + i * 3, 0, 33);
     buildPrefab('bowling', new THREE.Vector3(20, 0, 40), 0, false);
     buildPrefab('jenga', new THREE.Vector3(70, 0, 40), 0, false);
     buildPrefab('wall', new THREE.Vector3(70, 0, 20), 0, false);
+    buildPrefab('bridge', new THREE.Vector3(80, 0, -5), Math.PI / 2, false);
+    buildPrefab('arch', new THREE.Vector3(-25, 0, 50), 0, false);
     pallets(-4, 0, 28, 4);
     for (let i = 0; i < 3; i++) put('car', 80 + i * 5, 0, -40);
     buildPrefab('pyramid', new THREE.Vector3(0, 0, -15), 0, false);
   });
-  // ball pit
   for (const [x, z, w, d] of [[60, -65, 16, 1], [60, -81, 16, 1], [52, -73, 1, 16], [68, -73, 1, 16]]) sbox(w, 2, d, x, 1, z, 0xff006e);
   for (let i = 0; i < 45; i++) createEnt(ITEMS.ball, new THREE.Vector3(60 + rand(-6, 6), 1 + rand(0, 3), -73 + rand(-6, 6)), { color: 'random' });
   pad(10, 0, 20, new THREE.Vector3(0, 26, 0));
-  for (let i = 0; i < 40; i++) { const x = rr(-200, 200), z = rr(-200, 200); if (Math.hypot(x, z) > 100) tree(x, 0, z, rr(1, 1.6)); }
+  for (let i = 0; i < 40; i++) { const x = rr(-140, 140), z = rr(-140, 140); if (Math.hypot(x, z) > 100) tree(x, 0, z, rr(1, 1.6)); }
   crowd(12, 0, 0, 25); crowd(3, 60, 30, 5, 0, ['ninja']); crowd(2, -40, 0, 4, 0, ['robot']);
 }
 
-// --- hills: heightfield terrain
-let hf = null;
 function hillsHeight(x, z) {
   let h = 7 * Math.sin(x * 0.028) * Math.cos(z * 0.033) + 4 * Math.sin(x * 0.061 + 1) * Math.sin(z * 0.054 + 2) + 1.4 * Math.sin(x * 0.13 + z * 0.11);
-  h += 22 * Math.exp(-((x - 45) ** 2 + (z + 35) ** 2) / 500); // castle hill
-  h += 26 * Math.exp(-((x + 45) ** 2 + (z + 20) ** 2) / 380); // boulder peak
-  h -= 11 * Math.exp(-((x + 5) ** 2 + (z + 5) ** 2) / 420); // lake
+  h += 22 * Math.exp(-((x - 45) ** 2 + (z + 35) ** 2) / 500);
+  h += 26 * Math.exp(-((x + 45) ** 2 + (z + 20) ** 2) / 380);
+  h -= 11 * Math.exp(-((x + 5) ** 2 + (z + 5) ** 2) / 420);
   const edge = Math.max(Math.abs(x), Math.abs(z));
   if (edge > 90) h += (edge - 90) * 1.2;
   const sp = Math.hypot(x, z - 50);
-  if (sp < 16) h = h * (sp / 16) + 2 * (1 - sp / 16); // flat spawn
+  if (sp < 16) h = h * (sp / 16) + 2 * (1 - sp / 16);
   return h + 2;
-}
-export function groundHeight(x, z) {
-  if (!hf) return 0;
-  const { W, es, data, n } = hf;
-  const fx = (x + W / 2) / es, fz = (W / 2 - z) / es;
-  const i = clamp(Math.floor(fx), 0, n - 2), j = clamp(Math.floor(fz), 0, n - 2);
-  const tx = fx - i, tz = fz - j;
-  const a = data[i][j], b = data[i + 1][j], c = data[i][j + 1], d = data[i + 1][j + 1];
-  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
 function buildHills() {
   srand(23);
-  const W = 240, es = 3, n = W / es + 1;
-  const data = [];
-  for (let i = 0; i < n; i++) { data.push([]); for (let j = 0; j < n; j++) data[i].push(hillsHeight(-W / 2 + i * es, W / 2 - j * es)); }
-  hf = { W, es, data, n };
-  const shape = new CANNON.Heightfield(data, { elementSize: es });
-  const b = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
-  b.addShape(shape);
-  b.position.set(-W / 2, 0, W / 2);
-  b.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  G.world.addBody(b); mapBodies.push(b);
-  // visual terrain with height-based vertex colors
-  const geo = new THREE.PlaneGeometry(W, W, n - 1, n - 1);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  for (let k = 0; k < pos.count; k++) {
-    const i = Math.round((pos.getX(k) + W / 2) / es), j = Math.round((W / 2 - pos.getZ(k)) / es);
-    pos.setY(k, data[i][j]);
-  }
-  const ng = geo.toNonIndexed();
-  const p2 = ng.attributes.position;
-  const cols = new Float32Array(p2.count * 3);
-  const c = new THREE.Color();
-  for (let k = 0; k < p2.count; k += 3) {
-    const h = (p2.getY(k) + p2.getY(k + 1) + p2.getY(k + 2)) / 3;
-    if (h < 0.3) c.set(0xe2cf95); else if (h < 14) c.set(0x5fae4a).offsetHSL(0, 0, (Math.random() - 0.5) * 0.06); else if (h < 22) c.set(0x7d8288).offsetHSL(0, 0, (Math.random() - 0.5) * 0.05); else c.set(0xf4f7fb);
-    for (let v = 0; v < 3; v++) { cols[(k + v) * 3] = c.r; cols[(k + v) * 3 + 1] = c.g; cols[(k + v) * 3 + 2] = c.b; }
-  }
-  ng.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-  ng.computeVertexNormals();
-  const tm = new THREE.Mesh(ng, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
-  tm.receiveShadow = true;
-  mapGroup.add(tm);
+  makeTerrain({ W: 240, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
   water1(-1);
   const gh = groundHeight;
-  // castle on the hill
   const cx = 45, cz = -35, cy = gh(cx, cz);
   sbox(14, 1, 14, cx, cy - 0.3, cz, 0x8c9096, 'stone', null, 3);
   sleepy(() => {
     for (let l = 0; l < 3; l++) for (let i = -3; i <= 3; i++) for (const [x, z] of [[i, -3], [i, 3], [-3, i], [3, i]]) {
-      if (Math.abs(i) === 3 && (z === i || x === i) && !(x === -3 || x === 3) ) continue;
+      if (Math.abs(i) === 3 && (x === -3 || x === 3) && (z === -3 || z === 3) && z !== i && x !== i) continue;
       createEnt(ITEMS.stone, new THREE.Vector3(cx + x * 1.01, cy + 0.7 + l * 1.005, cz + z * 1.01), {});
     }
   });
-  // boulders on the peak, ready to roll
   const px = -45, pz = -20, py = gh(px, pz);
   sbox(10, 1, 10, px, py - 0.2, pz, 0x7d8288, 'stone');
   sleepy(() => { for (let i = 0; i < 4; i++) put('boulder', px + (i - 1.5) * 2.6, py + 0.4, pz + 2); put('tnt_mega', px, py + 0.4, pz - 2.5); });
-  // little cabins
   sleepy(() => {
-    for (const [x, z] of [[20, 30], [-25, 40]]) {
-      const y = gh(x, z);
-      for (let l = 0; l < 3; l++) for (let i = -1; i <= 1; i++) { createEnt(ITEMS.crate, new THREE.Vector3(x + i, y + 0.5 + l, z - 1.5), {}); createEnt(ITEMS.crate, new THREE.Vector3(x + i, y + 0.5 + l, z + 1.5), {}); }
-      createEnt(ITEMS.slab, new THREE.Vector3(x, y + 3.2, z - 0.5), {}); createEnt(ITEMS.slab, new THREE.Vector3(x, y + 3.2, z + 0.5), {});
-    }
+    for (const [x, z] of [[20, 30], [-25, 40]]) buildPrefab('house', new THREE.Vector3(x, gh(x, z), z), 0.3, false);
     pallets(-3, gh(0, 42) + 0.2, 42, 4);
     put('car', 8, gh(8, 50) + 0.3, 50);
     for (let i = 0; i < 6; i++) put('duck', -5 + rand(-8, 8), -0.6, -5 + rand(-8, 8));
@@ -374,7 +395,6 @@ function buildHills() {
 
 function buildSky() {
   srand(31);
-  G.waterY = -1000;
   const isl = [[0, 0, 0, 14], [40, 8, -20, 10], [-36, 14, -40, 12], [10, 26, -82, 16], [62, -8, 38, 9], [-52, -4, 30, 10], [-10, 40, -140, 11]];
   for (const [x, y, z, r] of isl) {
     scyl(r, 2, x, y - 1, z, 0x5fae4a, 'grass', 14);
@@ -385,11 +405,10 @@ function buildSky() {
   makeClouds(30, -35, 250);
   sleepy(() => {
     pallets(-5, 0, 8, 6);
-    put('pallet_big', 4, 0, -4); put('pallet_big', 7, 0, -4);
     buildPrefab('tower', new THREE.Vector3(40, 8, -20), 0, false);
     buildPrefab('pyramid', new THREE.Vector3(10, 26, -82), 0, false);
     buildPrefab('tntstack', new THREE.Vector3(-36, 14, -40), 0, false);
-    for (const [x, y, z] of isl.slice(1)) { put('pallet', x + 2, y, z + 2); put('pallet', x - 2, y, z - 2); }
+    for (const [x, y, z] of isl.slice(1)) put('pallet', x + 2, y, z + 2);
     buildPrefab('glassroom', new THREE.Vector3(62, -8, 38), 0, false);
     put('piano', -52, -4, 30); put('anvil', -50, -4, 28);
   });
@@ -398,11 +417,177 @@ function buildSky() {
   for (const [x, y, z, r] of isl) if (r > 9) crowd(Math.floor(r / 4), x, z, r * 0.4, y);
 }
 
+// ---- City: destructible buildings made of concrete blocks
+function buildCity() {
+  srand(41);
+  const road = (v) => Math.abs(((v % 40) + 40) % 40 - 20) > 14; // roads every 40 m
+  makeTerrain({
+    W: 200, es: 2, bedrock: -6, height: () => 0,
+    color: (h, x, z) => (road(x) || road(z) ? 0x3a3d42 : (Math.abs(((x % 40) + 40) % 40 - 20) > 12 || Math.abs(((z % 40) + 40) % 40 - 20) > 12) ? 0xb9b4aa : 0x6aa857),
+  });
+  // background skyline (solid)
+  for (let i = 0; i < 26; i++) {
+    const a = (i / 26) * Math.PI * 2, r = 110 + rr(0, 30), h = rr(25, 70);
+    sbox(rr(12, 20), h, rr(12, 20), Math.cos(a) * r, h / 2, Math.sin(a) * r, [0x8b95a1, 0x6e7781, 0xa3acb6, 0x5f6973][i % 4]);
+  }
+  sleepy(() => {
+    const blocks = [[0, 0], [40, 0], [-40, 0], [0, -40], [40, -40], [-40, -40], [40, 40], [-40, 40]];
+    blocks.forEach(([bx, bz], k) => {
+      if (k === 0) return; // central plaza
+      if (k % 3 === 0) buildPrefab('skyscraper', new THREE.Vector3(bx, 0, bz), 0, false);
+      else if (k % 3 === 1) { stack('concrete_big', bx - 4, 0, bz, 3, 3, 4 + (k % 3), 2); stack('concrete_big', bx + 6, 0, bz + 4, 2, 2, 3, 2); }
+      else { buildPrefab('house', new THREE.Vector3(bx - 5, 0, bz - 3), 0, false); buildPrefab('house', new THREE.Vector3(bx + 5, 0, bz + 4), Math.PI, false); }
+    });
+    // plaza fountain-ish + props
+    buildPrefab('arch', new THREE.Vector3(0, 0, -6), 0, false);
+    for (let i = 0; i < 6; i++) put('car', -20 + rand(-1, 1), 0, -30 + i * 10, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2) });
+    for (let i = 0; i < 5; i++) put('car', -30 + i * 12, 0, 20, {});
+    for (let i = 0; i < 14; i++) put('cone', rand(-60, 60), 0, 20 + rand(-1.5, 1.5));
+    for (let i = 0; i < 10; i++) put('lamp', -60 + i * 13, 0, 13.5);
+    for (let i = 0; i < 6; i++) put('barrier', 18 + rand(-1, 1), 0, -20 + i * 3);
+    for (let i = 0; i < 5; i++) put('mailbox', rand(-12, 12), 0, rand(-12, 12));
+    put('vending', 6, 0, 6); put('vending', 7.3, 0, 6);
+    for (let i = 0; i < 4; i++) put('bin', -6 + i * 4, 0, 8);
+    pallets(-4, 0, 12, 3);
+    buildPrefab('pallets', new THREE.Vector3(10, 0, -10), 0, false);
+  });
+  pad(0, 0, 0, new THREE.Vector3(0, 30, 0));
+  sbox(8, 0.5, 20, 60, 3, 20, 0xffbe0b, null, [0.3, 0, 0]);
+  crowd(16, 0, 10, 20); crowd(3, 0, -20, 10, 0, ['zombie']);
+}
+
+// ---- Desert canyon with a river, mesas and cacti
+function desertHeight(x, z) {
+  let h = 1.5 * Math.sin(x * 0.07) * Math.sin(z * 0.05) + 1.0 * Math.sin(x * 0.15 + z * 0.1);
+  const mesa = Math.max(0, Math.sin(x * 0.025 + 1) * Math.cos(z * 0.03) - 0.35);
+  h += Math.min(14, mesa * 40); // flat-topped mesas
+  const river = Math.abs(z - 18 * Math.sin(x * 0.03)) ;
+  if (river < 9) h -= (9 - river) * 0.75;
+  const sp = Math.hypot(x, z - 50);
+  if (sp < 14) h = h * (sp / 14) + 1 * (1 - sp / 14);
+  const edge = Math.max(Math.abs(x), Math.abs(z));
+  if (edge > 100) h += (edge - 100) * 1.3;
+  return h + 1;
+}
+function buildDesert() {
+  srand(53);
+  makeTerrain({
+    W: 240, es: 3, height: desertHeight, bedrock: -8,
+    color: (h) => (h < -1.5 ? 0xb89d6a : h < 4 ? 0xe2b97a : [0xc8743e, 0xd88a4f, 0xb5622f, 0xe0a067][Math.floor(h / 2.5) & 3]),
+  });
+  water1(-2.5);
+  const gh = groundHeight;
+  sleepy(() => {
+    for (let i = 0; i < 40; i++) { const x = rr(-90, 90), z = rr(-90, 90), y = gh(x, z); if (y > 0.5 && y < 3) put('cactus', x, y, z); }
+    for (const [x, z] of [[20, 40], [-22, 30], [30, -40]]) buildPrefab('house', new THREE.Vector3(x, gh(x, z), z), rr(0, 3), false);
+    for (let i = 0; i < 10; i++) { const x = rr(-30, 30), z = rr(30, 60); put(i % 3 ? 'barrel' : 'drum', x, gh(x, z), z); }
+    for (let i = 0; i < 8; i++) { const x = rr(-40, 40), z = rr(-30, 0); put('hay', x, gh(x, z), z); }
+    for (let i = 0; i < 12; i++) { const x = rr(-20, 20), z = rr(0, 20); const y = gh(x, z); if (y > -1) put('mine', x, y, z); }
+    put('car', 5, gh(5, 46), 46); put('car', -8, gh(-8, 44), 44);
+    pallets(-3, gh(0, 56) + 0.1, 56, 3);
+    buildPrefab('fort', new THREE.Vector3(-50, gh(-50, -50), -50), 0, false);
+  });
+  for (let i = 0; i < 25; i++) { const x = rr(-95, 95), z = rr(-95, 95); rock(x, gh(x, z), z, rr(0.8, 2.4)); }
+  for (let i = 0; i < 12; i++) { const x = rand(-20, 20), z = rand(40, 60); spawnDummy(new THREE.Vector3(x, gh(x, z) + 0.1, z), i % 4 === 3 ? 'ninja' : 'normal'); }
+}
+
+// ---- Snowy peaks with a frozen lake, igloos and snowmen
+function snowHeight(x, z) {
+  let h = 6 * Math.sin(x * 0.03 + 2) * Math.cos(z * 0.027) + 3 * Math.sin(x * 0.08) * Math.sin(z * 0.07);
+  h += 30 * Math.exp(-((x - 50) ** 2 + (z + 50) ** 2) / 700);
+  const lake = Math.hypot(x + 10, z + 5);
+  if (lake < 26) h = Math.min(h, -0.6);
+  const sp = Math.hypot(x, z - 50);
+  if (sp < 14) h = h * (sp / 14) + 2 * (1 - sp / 14);
+  const edge = Math.max(Math.abs(x), Math.abs(z));
+  if (edge > 95) h += (edge - 95) * 1.4;
+  return h + 2;
+}
+function buildSnow() {
+  srand(61);
+  makeTerrain({ W: 240, es: 3, height: snowHeight, bedrock: -9, color: (h) => (h < 3 ? 0xdfe9f0 : h < 18 ? 0xf2f6f9 : 0x9aa3ad) });
+  snowyTrees = true;
+  // frozen lake: slippery ice sheet
+  const ice = new THREE.Mesh(new THREE.CylinderGeometry(26, 26, 0.4, 24), new THREE.MeshStandardMaterial({ color: 0xa9e3ff, transparent: true, opacity: 0.85, roughness: 0.1, flatShading: true }));
+  ice.receiveShadow = true;
+  const b = addStatic(new CANNON.Cylinder(26, 26, 0.4, 24), new THREE.Vector3(-10, 1.25, -5), null, ice);
+  b.material = G.mats.ice;
+  const gh = groundHeight;
+  sleepy(() => {
+    for (const [x, z] of [[20, 25], [-30, 30], [30, -10], [-40, -30]]) buildPrefab('snowman', new THREE.Vector3(x, gh(x, z), z), 0, false);
+    for (const [x, z] of [[25, 40], [-25, 45]]) buildPrefab('igloo', new THREE.Vector3(x, gh(x, z), z), 0, false);
+    for (let i = 0; i < 25; i++) put('snowball', -10 + rand(-15, 15), 1.5, -5 + rand(-15, 15));
+    for (let i = 0; i < 8; i++) put('ice', -10 + rand(-10, 10), 1.5, -5 + rand(-10, 10));
+    pallets(-3, gh(0, 55) + 0.1, 55, 3);
+    buildPrefab('house', new THREE.Vector3(10, gh(10, 60), 60), 0, false);
+    const px = 50, pz = -50, py = gh(px, pz);
+    for (let i = 0; i < 4; i++) put('boulder', px + rand(-3, 3), py + 1, pz + rand(-3, 3));
+  });
+  for (let i = 0; i < 90; i++) {
+    const x = rr(-90, 90), z = rr(-90, 90), y = gh(x, z);
+    if (Math.hypot(x + 10, z + 5) > 30 && Math.hypot(x, z - 50) > 12 && y < 20) tree(x, y - 0.2, z, rr(0.8, 1.5));
+  }
+  snowyTrees = false;
+  for (let i = 0; i < 12; i++) { const x = rand(-25, 25), z = rand(35, 60); spawnDummy(new THREE.Vector3(x, gh(x, z) + 0.1, z), i % 5 === 4 ? 'big' : 'normal'); }
+}
+
+// ---- Playground: swings, see-saws, slides, trampolines, ball pit
+function buildPlayground() {
+  srand(71);
+  makeTerrain({ W: 160, es: 2, bedrock: -5, height: () => 0, color: (h, x, z) => (Math.hypot(x, z) < 12 ? 0xe9d29a : Math.abs(x) > 60 || Math.abs(z) > 60 ? 0x4f9a3c : 0x63b34d) });
+  // fence
+  for (const [x, z, w, d] of [[0, 62, 124, 0.4], [0, -62, 124, 0.4], [62, 0, 0.4, 124], [-62, 0, 0.4, 124]]) sbox(w, 1.2, d, x, 0.6, z, 0xffffff);
+  // swings: seat planks hanging on ropes from a static bar
+  for (let s = 0; s < 3; s++) {
+    const x = -30 + s * 3;
+    sbox(0.3, 4, 0.3, x - 1.3, 2, -30, 0xff006e); sbox(0.3, 4, 0.3, x + 1.3, 2, -30, 0xff006e);
+    const bar = sbox(3, 0.25, 0.25, x, 4, -30, 0xff006e);
+    const seat = createEnt({ ...ITEMS.chunk, size: [1, 0.12, 0.5], mat: 'wood', tex: 'plank' }, new THREE.Vector3(x, 1, -30), {});
+    addRope(bar, new CANNON.Vec3(-0.45, 0, 0), seat.body, new CANNON.Vec3(-0.45, 0, 0), 3);
+    addRope(bar, new CANNON.Vec3(0.45, 0, 0), seat.body, new CANNON.Vec3(0.45, 0, 0), 3);
+  }
+  // see-saws
+  for (let k = 0; k < 2; k++) {
+    const x = -10 + k * 6;
+    sbox(0.6, 0.6, 0.6, x, 0.15, -30, 0x3a86ff, null, [Math.PI / 4, 0, 0]);
+    createEnt({ ...ITEMS.chunk, size: [0.6, 0.12, 5], mat: 'wood', tex: 'plank' }, new THREE.Vector3(x, 0.65, -30), {});
+  }
+  // slide: platform + ladder + chute
+  sbox(3, 0.3, 3, 20, 4, -30, 0xffbe0b);
+  for (const [dx, dz] of [[-1.3, -1.3], [1.3, -1.3], [-1.3, 1.3], [1.3, 1.3]]) sbox(0.25, 4, 0.25, 20 + dx, 2, -30 + dz, 0xffbe0b);
+  for (let i = 0; i < 8; i++) sbox(1.2, 0.15, 0.4, 20, 0.4 + i * 0.5, -32 - i * 0.05, 0x8338ec);
+  sbox(1.6, 0.2, 9, 20, 2, -24.6, 0x06d6a0, null, [-0.45, 0, 0]);
+  // trampolines
+  for (let i = 0; i < 4; i++) pad(-30 + i * 6, 0, 10, new THREE.Vector3(0, 14 + i * 4, 0), 0x3bd1ff);
+  pad(30, 0, 30, new THREE.Vector3(-16, 22, -16), 0xffb703);
+  // ball pit
+  for (const [x, z, w, d] of [[30, 15, 12, 0.6], [30, 3, 12, 0.6], [24, 9, 0.6, 12], [36, 9, 0.6, 12]]) sbox(w, 1.4, d, x, 0.7, z, 0xff006e);
+  for (let i = 0; i < 60; i++) createEnt(ITEMS.ball, new THREE.Vector3(30 + rand(-5, 5), 1 + rand(0, 4), 9 + rand(-5, 5)), { color: 'random' });
+  // climbing frame
+  for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) sbox(0.2, 3, 0.2, -30 + a * 2, 1.5, 30 + b * 2, 0xef476f);
+  sbox(4.4, 0.2, 4.4, -28, 3.1, 32, 0xef476f);
+  sleepy(() => {
+    buildPrefab('pyramid', new THREE.Vector3(0, 0, 30), 0, false);
+    buildPrefab('domino', new THREE.Vector3(40, 0, -10), 0, false);
+    buildPrefab('bowling', new THREE.Vector3(-45, 0, -5), Math.PI / 2, false);
+    buildPrefab('stairs', new THREE.Vector3(45, 0, 40), 0, false);
+    for (let i = 0; i < 6; i++) put('beachball', rand(-8, 8), 0, rand(-8, 8));
+    for (let i = 0; i < 4; i++) put('jelly', -45 + i * 1.5, 0, 40);
+    pallets(-4, 0, 45, 3);
+    buildPrefab('pallets', new THREE.Vector3(6, 0, 45), 0, false);
+  });
+  crowd(14, 0, 0, 30, 0, ['tiny', 'tiny', 'normal', 'bouncy']);
+}
+
 export const MAPS = [
-  { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30 },
-  { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40 },
-  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 90, 300], killY: -30 },
-  { id: 'sky', name: 'Sky Islands', icon: '☁️', desc: 'Floating islands. Fly between them on pallets!', build: buildSky, spawn: [0, 1.5, 5], sky: [0x2b59c3, 0xffc6a8], fog: [0xffc6a8, 120, 420], killY: -80 },
+  { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
+  { id: 'city', name: 'City', icon: '🏙️', desc: 'Concrete buildings you can bring down, cars, zombies', build: buildCity, spawn: [0, 1.2, 30], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 80, 260], killY: -30, water: -1000, walk: 90 },
+  { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
+  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 90, 300], killY: -30, water: -1, walk: 85 },
+  { id: 'desert', name: 'Desert Canyon', icon: '🏜️', desc: 'Mesas, a river canyon, cacti, oil drums & a minefield', build: buildDesert, spawn: [0, 4, 50], sky: [0x6aa8e8, 0xffd9a8], fog: [0xffd9a8, 90, 320], killY: -30, water: -2.5, walk: 85 },
+  { id: 'snow', name: 'Snowy Peaks', icon: '❄️', desc: 'Slippery frozen lake, igloos, snowmen, a big mountain', build: buildSnow, spawn: [0, 5, 50], sky: [0x9cc3e6, 0xf2f6fa], fog: [0xf2f6fa, 70, 260], killY: -30, water: -1000, walk: 85 },
+  { id: 'playground', name: 'Playground', icon: '🛝', desc: 'Swings, see-saws, a slide, trampolines & a ball pit', build: buildPlayground, spawn: [0, 1.2, 50], sky: [0x5bb1ff, 0xfff0d6], fog: [0xfff0d6, 90, 300], killY: -30, water: -1000, walk: 55 },
+  { id: 'sky', name: 'Sky Islands', icon: '☁️', desc: 'Floating islands high above the clouds', build: buildSky, spawn: [0, 1.5, 5], sky: [0x2b59c3, 0xffc6a8], fog: [0xffc6a8, 120, 420], killY: -80, water: -1000, walk: 999 },
 ];
 
 export function clearWorld() {
@@ -430,12 +615,12 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; hf = null;
+  water = null; clouds = []; T = null; G.groundAt = null;
   G.mapId = m.id;
   G.map = m;
   G.killY = m.killY;
-  G.walkBound = { island: 58, flat: 180, hills: 85, sky: 999 }[m.id];
-  G.particleFloor = m.id === 'island' || m.id === 'flat';
+  G.walkBound = m.walk;
+  G.waterY = m.water;
   skyDome(m.sky[0], m.sky[1]);
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
   m.build();
@@ -451,15 +636,13 @@ export function updateMap(dt) {
     const t = G.time;
     for (let i = 0; i < p.count; i++) {
       const x = waterBase[i * 3], z = waterBase[i * 3 + 2];
-      p.array[i * 3 + 1] = Math.sin(x * 0.08 + t * 1.2) * 0.18 + Math.cos(z * 0.07 + t * 0.9) * 0.18;
+      p.array[i * 3 + 1] = Math.sin(x * 0.08 + t * 1.2) * 0.12 + Math.cos(z * 0.07 + t * 0.9) * 0.12;
     }
     p.needsUpdate = true;
   }
   for (const c of clouds) { c.position.x += c.userData.v * dt; if (c.position.x > 320) c.position.x = -320; }
   if (sky && G.camera) sky.position.copy(G.camera.position);
-  // pads
   for (const pd of G.pads) {
-    pd.arrow.position.y = pd.pos.y + 1.0 + Math.sin(G.time * 4) * 0.2;
     const check = (b) => {
       const dx = b.position.x - pd.pos.x, dz = b.position.z - pd.pos.z, dy = b.position.y - pd.pos.y;
       if (dx * dx + dz * dz > pd.r * pd.r || dy < -0.3 || dy > 1.6) return;
@@ -468,7 +651,7 @@ export function updateMap(dt) {
       _padT.set(b, G.time);
       b.velocity.set(pd.vel.x, pd.vel.y, pd.vel.z);
       b.wakeUp();
-      sfx.boing();
+      sfx.boing(b.position);
       FX.ring(pd.pos.clone(), 3, pd.color, 0.4);
       if (b.isPlayer) G.player.stun = 0.4;
       const d = b.ent && b.ent.dummy;

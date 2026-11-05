@@ -1,17 +1,19 @@
-// HUD: hotbar, menu (tools / items / maps / help), stats, crosshair.
+// HUD + menu. Black & white, minimal.
+// Menu: sidebar (Tools / Items / Maps / Controls), search, and a hotbar editor:
+// click a slot, then click tools to fill it. TAB / Esc / "Play" closes.
 import { G, toast } from './core.js';
 import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR } from './tools/index.js';
 import { CATALOG, ITEMS } from './items.js';
 import { MAPS, loadMap } from './map.js';
 
 const $ = (id) => document.getElementById(id);
-const hex = (c) => '#' + c.toString(16).padStart(6, '0');
 
 export const UI = {
   hotbar: [...DEFAULT_HOTBAR],
   slot: 0,
   menuOpen: false,
   tab: 'tools',
+  query: '',
   onEquip: null,
 };
 
@@ -22,42 +24,48 @@ try {
 function saveHotbar() { try { localStorage.setItem('fling_hotbar', JSON.stringify(UI.hotbar)); } catch (e) { /* ignore */ } }
 
 export function currentTool() { return TOOL[UI.hotbar[UI.slot]]; }
+const slotIcon = (id) => (id === 'spawner' ? ITEMS[G.spawnId].icon : TOOL[id].icon);
+const slotName = (id) => (id === 'spawner' ? ITEMS[G.spawnId].name : TOOL[id].name);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export function buildHotbar() {
   const hb = $('hotbar');
   hb.innerHTML = '';
   UI.hotbar.forEach((id, i) => {
-    const t = TOOL[id];
     const d = document.createElement('div');
     d.className = 'slot' + (i === UI.slot ? ' on' : '');
-    d.style.setProperty('--c', hex(t.color));
-    const icon = id === 'spawner' ? ITEMS[G.spawnId].icon : t.icon;
-    d.innerHTML = `<span class="k">${(i + 1) % 10}</span><span class="i">${icon}</span><span class="n">${id === 'spawner' ? ITEMS[G.spawnId].name : t.name}</span>`;
-    d.onclick = () => selectSlot(i);
+    d.innerHTML = `<span class="k">${(i + 1) % 10}</span><span class="i">${slotIcon(id)}</span>`;
+    d.title = slotName(id);
     hb.appendChild(d);
   });
   const t = currentTool();
-  $('toolname').textContent = t.name + (t.id === 'spawner' ? ` — ${ITEMS[G.spawnId].icon} ${ITEMS[G.spawnId].name}` : '');
+  $('toolname').textContent = t.id === 'spawner' ? `Spawner · ${ITEMS[G.spawnId].name}` : t.name;
   $('toolhint').textContent = t.hint;
 }
 
-export function selectSlot(i) {
-  const prev = currentTool();
-  if (i === UI.slot) return;
-  if (prev && prev.unequip) prev.unequip();
-  UI.slot = i;
+function equipChanged(prev) {
+  if (prev && prev.unequip && prev !== currentTool()) prev.unequip();
   buildHotbar();
   if (UI.onEquip) UI.onEquip(currentTool());
+}
+
+export function selectSlot(i) {
+  if (i === UI.slot) return;
+  const prev = currentTool();
+  UI.slot = i;
+  equipChanged(prev);
 }
 
 export function setTool(id) {
   const prev = currentTool();
-  if (prev && prev.unequip && prev.id !== id) prev.unequip();
   const existing = UI.hotbar.indexOf(id);
-  if (existing >= 0) UI.slot = existing;
-  else { UI.hotbar[UI.slot] = id; saveHotbar(); }
-  buildHotbar();
-  if (UI.onEquip) UI.onEquip(currentTool());
+  if (existing >= 0 && existing !== UI.slot) {
+    // swap so a tool is never in two slots
+    UI.hotbar[existing] = UI.hotbar[UI.slot];
+  }
+  UI.hotbar[UI.slot] = id;
+  saveHotbar();
+  equipChanged(prev);
 }
 
 export function cycleTool(dir) {
@@ -65,60 +73,90 @@ export function cycleTool(dir) {
   let j = i;
   for (let k = 0; k < TOOLS.length; k++) {
     j = (j + dir + TOOLS.length) % TOOLS.length;
-    if (!UI.hotbar.includes(TOOLS[j].id) || TOOLS[j].id === UI.hotbar[UI.slot]) break;
+    if (!UI.hotbar.includes(TOOLS[j].id)) break;
   }
   const prev = currentTool();
-  if (prev && prev.unequip) prev.unequip();
   UI.hotbar[UI.slot] = TOOLS[j].id;
   saveHotbar();
-  buildHotbar();
-  if (UI.onEquip) UI.onEquip(currentTool());
-  toast(`${TOOLS[j].icon} ${TOOLS[j].name}`);
+  equipChanged(prev);
+  toast(TOOLS[j].name);
 }
 
-function card(icon, name, sub, color, onClick, active) {
+function card(icon, name, sub, onClick, active, extra = '') {
   const b = document.createElement('button');
   b.className = 'card' + (active ? ' on' : '');
-  if (color != null) b.style.setProperty('--c', hex(color));
-  b.innerHTML = `<span class="i">${icon}</span><span class="n">${name}</span>${sub ? `<span class="s">${sub}</span>` : ''}`;
+  b.innerHTML = `<span class="i">${icon}</span><span class="txt"><span class="n">${esc(name)}</span>${sub ? `<span class="s">${esc(sub)}</span>` : ''}</span>${extra}`;
   b.onclick = (e) => { e.stopPropagation(); onClick(); };
   return b;
+}
+function section(body, title, count) {
+  const h = document.createElement('h3');
+  h.innerHTML = `${esc(title)}${count != null ? `<span>${count}</span>` : ''}`;
+  body.appendChild(h);
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  body.appendChild(grid);
+  return grid;
+}
+const match = (...fields) => {
+  const q = UI.query.trim().toLowerCase();
+  return !q || fields.some((f) => f && f.toLowerCase().includes(q));
+};
+
+function renderHotbarEditor() {
+  const row = $('hbedit');
+  row.innerHTML = '';
+  row.style.display = UI.tab === 'tools' ? '' : 'none';
+  UI.hotbar.forEach((id, i) => {
+    const s = document.createElement('button');
+    s.className = 'hslot' + (i === UI.slot ? ' on' : '');
+    s.innerHTML = `<span class="k">${(i + 1) % 10}</span><span class="i">${slotIcon(id)}</span><span class="n">${esc(slotName(id))}</span>`;
+    s.onclick = (e) => { e.stopPropagation(); selectSlot(i); renderMenu(); };
+    row.appendChild(s);
+  });
 }
 
 export function renderMenu() {
   const body = $('menubody');
   body.innerHTML = '';
-  document.querySelectorAll('#menutabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === UI.tab));
+  document.querySelectorAll('#menunav button[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === UI.tab));
+  $('menusearch').style.visibility = UI.tab === 'tools' || UI.tab === 'items' ? 'visible' : 'hidden';
+  renderHotbarEditor();
   if (UI.tab === 'tools') {
-    const note = document.createElement('p');
-    note.className = 'note';
-    note.textContent = `Click a tool to put it in hotbar slot ${(UI.slot + 1) % 10}. (${TOOLS.length} tools)`;
-    body.appendChild(note);
+    $('menutitle').textContent = 'Tools';
+    $('menusub').textContent = `Pick a slot above, then click a tool to put it there. ${TOOLS.length} tools.`;
     for (const [name, list] of TOOL_GROUPS) {
-      const h = document.createElement('h3'); h.textContent = name; body.appendChild(h);
-      const grid = document.createElement('div'); grid.className = 'grid';
-      for (const t of list) grid.appendChild(card(t.icon, t.name, t.hint, t.color, () => { setTool(t.id); closeMenu(); }, UI.hotbar[UI.slot] === t.id));
-      body.appendChild(grid);
+      const l = list.filter((t) => match(t.name, t.hint, name));
+      if (!l.length) continue;
+      const grid = section(body, name, l.length);
+      for (const t of l) {
+        const slotOf = UI.hotbar.indexOf(t.id);
+        grid.appendChild(card(t.icon, t.name, t.hint, () => { setTool(t.id); renderMenu(); }, slotOf === UI.slot, slotOf >= 0 ? `<span class="badge">${(slotOf + 1) % 10}</span>` : ''));
+      }
     }
   } else if (UI.tab === 'items') {
-    const note = document.createElement('p');
-    note.className = 'note';
-    note.textContent = `Pick something to spawn with the Spawner (${CATALOG.length} things). Tip: T cycles items in-game.`;
-    body.appendChild(note);
+    $('menutitle').textContent = 'Spawn';
+    $('menusub').textContent = `Choose what the Spawner makes. ${CATALOG.length} things. (T cycles in-game)`;
     const cats = [...new Set(CATALOG.map((d) => d.cat))];
     for (const c of cats) {
-      const h = document.createElement('h3'); h.textContent = c; body.appendChild(h);
-      const grid = document.createElement('div'); grid.className = 'grid small';
-      for (const d of CATALOG.filter((x) => x.cat === c)) grid.appendChild(card(d.icon, d.name, '', null, () => { G.spawnId = d.id; setTool('spawner'); closeMenu(); }, G.spawnId === d.id));
-      body.appendChild(grid);
+      const l = CATALOG.filter((x) => x.cat === c && match(x.name, c));
+      if (!l.length) continue;
+      const grid = section(body, c, l.length);
+      grid.classList.add('small');
+      for (const d of l) grid.appendChild(card(d.icon, d.name, '', () => { G.spawnId = d.id; setTool('spawner'); closeMenu(); toast(`Spawner · ${d.name}`); }, G.spawnId === d.id));
     }
   } else if (UI.tab === 'maps') {
-    const grid = document.createElement('div'); grid.className = 'grid';
-    for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, null, () => { loadMap(m.id); closeMenu(); toast(`${m.icon} ${m.name}`); }, G.mapId === m.id));
-    body.appendChild(grid);
+    $('menutitle').textContent = 'Maps';
+    $('menusub').textContent = `${MAPS.length} maps. Loading a map resets everything on it.`;
+    const grid = section(body, 'All maps');
+    grid.classList.add('wide');
+    for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, () => { loadMap(m.id); closeMenu(); toast(m.name); }, G.mapId === m.id));
   } else {
-    body.innerHTML = $('helptext').innerHTML;
+    $('menutitle').textContent = 'Controls';
+    $('menusub').textContent = 'Single click + keyboard only. No right-click or two-finger click needed.';
+    body.innerHTML += $('helptext').innerHTML;
   }
+  if (!body.children.length) body.innerHTML = '<p class="empty">Nothing matches that search.</p>';
 }
 
 export function openMenu(tab) {
@@ -131,14 +169,16 @@ export function openMenu(tab) {
 export function closeMenu() {
   UI.menuOpen = false;
   $('menu').classList.remove('open');
+  $('menusearch').blur();
   G.requestLock && G.requestLock();
 }
 
 export function initMenu() {
-  document.querySelectorAll('#menutabs button').forEach((b) => {
-    b.onclick = (e) => { e.stopPropagation(); UI.tab = b.dataset.tab; renderMenu(); };
+  document.querySelectorAll('#menunav button[data-tab]').forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); UI.tab = b.dataset.tab; UI.query = ''; $('menusearch').value = ''; renderMenu(); };
   });
   $('menuclose').onclick = (e) => { e.stopPropagation(); closeMenu(); };
+  $('menusearch').addEventListener('input', (e) => { UI.query = e.target.value; renderMenu(); });
   $('menu').addEventListener('mousedown', (e) => e.stopPropagation());
 }
 
@@ -147,10 +187,8 @@ export function updateHud(dt) {
   frames++; fpsT += dt;
   if (fpsT > 0.5) { fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
   const s = G.stats;
-  $('stats').innerHTML = `💥 ${s.booms} &nbsp; 🧱 ${s.destroyed} &nbsp; 🧍 ${s.flings} flung &nbsp; 🏆 ${s.best.toFixed(1)}m` +
-    `<br><span class="dim">${G.map ? G.map.icon + ' ' + G.map.name : ''} · ${G.ents.size} objects · ${fps} fps${G.timeScale < 1 ? ' · <b>SLOW-MO</b>' : ''}${G.player && G.player.flying ? ' · <b>FLYING</b>' : ''}</span>`;
-  const ch = $('crosshair');
-  ch.className = G.crossHint || '';
-  ch.style.setProperty('--c', hex(currentTool().color));
+  $('stats').innerHTML = `<div class="row"><span>BOOMS</span><b>${s.booms}</b><span>BROKEN</span><b>${s.destroyed}</b><span>FLUNG</span><b>${s.flings}</b><span>BEST</span><b>${s.best.toFixed(1)}m</b></div>` +
+    `<div class="dim">${G.map ? G.map.name.toUpperCase() : ''} · ${G.ents.size} OBJECTS · ${fps} FPS${G.timeScale < 1 ? ' · SLOW-MO' : ''}${G.player && G.player.flying ? ' · FLYING' : ''}</div>`;
+  $('crosshair').className = G.crossHint || '';
   $('toolnote').textContent = G.toolNote || '';
 }

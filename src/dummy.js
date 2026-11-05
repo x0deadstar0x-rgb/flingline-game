@@ -88,7 +88,7 @@ export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
     m.quaternion.copy(qy).multiply(_q);
   };
   const sw = Math.sin(phase) * 0.7 * amt;
-  const bob = Math.abs(Math.cos(phase)) * 0.05 * amt * s;
+  const bob = 0; // no up/down bounce
   set('legL', -0.14, 0, 0, sw, 0.8);
   set('legR', 0.14, 0, 0, -sw, 0.8);
   let al = -sw, ar = sw;
@@ -116,6 +116,7 @@ export class Dummy {
     this.s = this.cfg.s * (opts.scale ?? 1);
     this.massTotal = 30 * this.cfg.mass * this.s ** 3;
     this.buoy = this.cfg.buoy;
+    this.pitch = (this.cfg.metal ? 90 : rand(130, 230)) / Math.sqrt(this.s);
     this.colors = {
       skin: this.cfg.skin ?? pick(SKINS), shirt: this.cfg.shirt ?? pick(SHIRTS), pants: this.cfg.pants ?? pick(PANTS),
       eyes: this.cfg.eyes, band: this.cfg.band, metal: this.cfg.metal, sleeve: Math.random() < 0.4,
@@ -205,7 +206,7 @@ export class Dummy {
       b.ent = ent;
       b.addEventListener('collide', (e) => {
         const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
-        if (v > 7) { sfx.oof(); if (v > 14) afterStep(() => { if (this.parts) FX.debris(tv(b.position), 0xffffff, 3, 0.08, 3); }); }
+        if (v > 7) { sfx.oof(b.position, this.pitch); if (v > 14) afterStep(() => { if (this.parts) FX.debris(tv(b.position), 0xffffff, 3, 0.08, 3); }); }
       });
       G.world.addBody(b);
       G.ents.add(ent);
@@ -228,7 +229,7 @@ export class Dummy {
     this.state = 'ragdoll';
     this.downTime = 0; this.still = 0;
     this.flingStart = this.center(); this.maxDist = 0;
-    sfx.oof();
+    sfx.oof(this.center(), this.pitch);
   }
 
   // called when the fling line throws this dummy
@@ -236,7 +237,7 @@ export class Dummy {
 
   hurt(dmg, dir) {
     if (this.state === 'standing') this.knock(dir ? dir.clone().multiplyScalar(Math.min(dmg * 0.15, 12)) : null);
-    else if (dmg > 8) sfx.oof();
+    else if (dmg > 8) sfx.oof(this.center(), this.pitch);
   }
 
   freeze(dur) {
@@ -287,7 +288,7 @@ export class Dummy {
     this.clearRagdoll();
     this.makeStanding(feet);
     this.yaw = rand(0, Math.PI * 2);
-    sfx.pop();
+    sfx.pop(feet);
     FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.3, 0)), 4, 0xd9cfb8, 0.5);
   }
 
@@ -333,7 +334,7 @@ export class Dummy {
     if (this.burn > 0 || this.cfg.metal) return;
     if (this.center().y < G.waterY) return;
     this.burn = 7;
-    sfx.oof();
+    sfx.oof(this.center(), this.pitch);
   }
 
   update(dt) {
@@ -342,7 +343,7 @@ export class Dummy {
       const c = this.center();
       if (c.y < G.waterY + 0.3) { this.burn = 0; FX.smoke(c, 5, 0xdddddd, 0.6); }
       if (Math.random() < 0.6) FX.particle({ pos: c.clone().add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.6, 0.6) * this.s, rand(-0.3, 0.3))), vel: new THREE.Vector3(rand(-0.5, 0.5), rand(2, 4), rand(-0.5, 0.5)), color: Math.random() < 0.5 ? 0xff7a1a : 0xffc04a, size: rand(0.2, 0.35) * this.s, life: rand(0.4, 0.7), glow: true, add: true, gravity: -2, floor: false });
-      if (Math.random() < dt * 1.5) sfx.oof();
+      if (Math.random() < dt * 1.5) sfx.oof(c, this.pitch);
     }
     if (this.state === 'standing') this.updateStanding(dt);
     else this.updateRagdoll(dt);
@@ -370,9 +371,9 @@ export class Dummy {
       if (d < 1.3 * s + 0.5 && ai.shove <= 0) {
         ai.shove = 1.2;
         G.player.fling(want.clone().multiplyScalar(9).add(new THREE.Vector3(0, 5, 0)));
-        sfx.oof(); popup('BONK', pp.clone().add(new THREE.Vector3(0, 2, 0)), '#8f8', 18);
+        sfx.oof(pp, this.pitch); popup('BONK', pp.clone().add(new THREE.Vector3(0, 2, 0)), '#8f8', 18);
       }
-      if (Math.random() < dt * 0.15) sfx.groan?.();
+      if (Math.random() < dt * 0.15) sfx.groan(feet);
     } else {
       ai.t -= dt;
       if (ai.t <= 0) {

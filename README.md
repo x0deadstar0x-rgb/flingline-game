@@ -18,7 +18,7 @@ A 3D semi low-poly **physics sandbox** that runs in the browser. Grab things wit
 | W A S D / Space / Shift | Move / jump (double jump) / sprint |
 | 1–0 | Hotbar slots |
 | Q / E | Swap the tool in the current slot |
-| TAB or B | Menu: all tools, all spawnable items, maps, controls |
+| TAB or B | Menu: tools (with hotbar editor + search), spawn items, maps, controls |
 | T | Next spawn item |
 | N | Fly mode |
 | G | Slow motion |
@@ -27,13 +27,14 @@ A 3D semi low-poly **physics sandbox** that runs in the browser. Grab things wit
 | [ / ] | Mouse sensitivity |
 
 ### Fling Line
-Click to shoot your line and grab something. **Click again to throw it**, **F** drops it, **Z / X** shortens or extends the line, and **R** spins it.
-**Pallets:** grab one and it flies wherever you look. Stand on it first to ride it.
+**Click** grabs something with your line (short reach, so get close). **Click again** drops it, **F throws it**, **Z / X** shortens or lengthens the line, and **R** spins what you're holding.
 
 ## What's in it
 - **34 tools:** Fling Line, Blaster, Shotgun, Minigun, Railgun, Lightning Gun, Flamethrower, Cannon, Home Run Bat, TNT Toss, Grenade Launcher, Rocket Launcher, Sticky Bombs, Black Hole, Fire Bomb, Meteor Strike, Airstrike, Nuke, Fireworks, Force Push, Magnet, Freeze Ray, Anti-Gravity Ray, Grow Ray, Shrink Ray, Paint Gun, Teleporter, Spawner, Eraser, Cloner, Rope Tool, Weld Tool, Balloon Tool, Thruster.
-- **74 spawnable things:** blocks (wood, stone, brick, glass, ice, metal…), explosives (TNT, mega TNT, barrels, oil drums, gas canisters, fireworks, nukes, land mines, C4), balls, fun props (balloons, ducks, watermelons, presents, jelly…), furniture & cars, flying pallets, 9 kinds of dummies (zombie, ninja, robot, bouncy…) and 10 prefabs (walls, towers, jenga, bowling…).
-- **4 maps:** Island, Flatlands, Hills (real terrain + lake), Sky Islands.
+- **90 spawnable things:** blocks (wood, stone, brick, glass, ice, metal, concrete, hay…), explosives (TNT, mega TNT, barrels, oil drums, gas canisters, fireworks, nukes, land mines, C4), balls, fun props (balloons, ducks, watermelons, snowballs, cacti, presents…), furniture, cars, street lamps, pallets, 9 kinds of dummies (zombie, ninja, robot, bouncy…) and 19 structures (house, bridge, skyscraper, fort, arch, igloo, snowman, walls, towers, jenga, bowling…).
+- **8 maps:** Island, City, Flatlands, Hills, Desert Canyon, Snowy Peaks, Playground, Sky Islands.
+- **Breakable ground:** explosions dig real craters into the terrain (they fill with water near the sea).
+- **3D sound:** sounds come from where they happen, fade with distance and pan left/right; each material and action has its own sound.
 - **Everything interacts:** chain reactions, spreading fire, materials that break differently, freezing, floating in water, ropes and balloons, jump pads, and ragdolls that get back up.
 
 ## Develop

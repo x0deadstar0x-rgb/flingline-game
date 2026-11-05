@@ -29,6 +29,10 @@ export const MAT = {
   appliance:{ density: 50, hp: 150, thresh: 12, brk: 'chunks', fr: 0.5, re: 0.1, buoy: 0.9, color: 0xeef2f4, min: 0.3 },
   car:     { density: 45,  hp: 320, thresh: 14, brk: 'chunks', fr: 0.25, re: 0.15, buoy: 0.8, color: 0x2b7de9, min: 0.45 },
   balloon: { density: 0.3, hp: 1,   thresh: 9,  brk: 'pop', fr: 0.5, re: 0.6, buoy: 10, color: 0xff3b3b },
+  concrete:{ density: 140, hp: 220, thresh: 14, brk: 'chunks', fr: 0.8, re: 0.1, buoy: 0.4, color: 0xa8a8a2, min: 0.45 },
+  snow:    { density: 25,  hp: 8,   thresh: 5,  brk: 'splat', fr: 0.5, re: 0.05, buoy: 1.5, color: 0xf4f8fb },
+  cactus:  { density: 40,  hp: 40,  thresh: 8,  brk: 'chunks', fr: 0.7, re: 0.1, buoy: 1.2, color: 0x3f8f3a, min: 0.2 },
+  hay:     { density: 12,  hp: 25,  thresh: 8,  brk: 'chunks', fr: 0.9, re: 0.05, buoy: 3, color: 0xd9b64a, min: 0.3 },
   flesh:   { density: 40,  hp: Infinity, thresh: 99, brk: 'none', fr: 0.7, re: 0.1, buoy: 1.4, color: 0xf0c8a0 },
   bouncyflesh: { density: 40, hp: Infinity, thresh: 99, brk: 'none', fr: 0.7, re: 0.95, buoy: 1.4, color: 0xff7ac8 },
 };
@@ -102,6 +106,12 @@ export const CATALOG = [
   B('beam', 'Steel Beam', '➖', 'Build', { shape: 'box', size: [3, 0.3, 0.3], mat: 'metal', tex: 'metal' }),
   B('domino', 'Domino', '🁢', 'Build', { shape: 'box', size: [0.5, 1.2, 0.15], mat: 'plastic', color: 0xf4f4f4 }),
   B('gold', 'Gold Bar', '🥇', 'Build', { shape: 'box', size: [0.6, 0.3, 0.3], mat: 'gold', tex: 'gold' }),
+  B('concrete', 'Concrete Block', '◻️', 'Build', { shape: 'box', size: [1, 1, 1], mat: 'concrete', tex: 'concrete' }),
+  B('concrete_big', 'Big Concrete Block', '⬛', 'Build', { shape: 'box', size: [2, 2, 2], mat: 'concrete', tex: 'concrete' }),
+  B('barrier', 'Road Barrier', '🚧', 'Build', { shape: 'compound', mat: 'concrete', parts: [
+    { t: 'box', size: [1.8, 0.35, 0.7], off: [0, -0.25, 0], tex: 'concrete' },
+    { t: 'box', size: [1.8, 0.55, 0.3], off: [0, 0.2, 0], tex: 'concrete' }] }),
+  B('hay', 'Hay Bale', '🌾', 'Build', { shape: 'box', size: [1.2, 0.8, 0.8], mat: 'hay', tex: 'hay' }),
   // Explosives
   B('tnt', 'TNT', '🧨', 'Boom', { shape: 'box', size: [0.9, 0.9, 0.9], mat: 'tnt', tex: 'tnt', explosive: { power: 1, impact: 17, hp: 1 } }),
   B('tnt_mini', 'Mini TNT', '🧨', 'Boom', { shape: 'box', size: [0.5, 0.5, 0.5], mat: 'tnt', tex: 'tnt', explosive: { power: 0.5, impact: 17, hp: 1 } }),
@@ -141,8 +151,22 @@ export const CATALOG = [
     { t: 'box', size: [0.35, 0.3, 0.3], off: [0, 0, 0], color: 0x333333 },
     { t: 'box', size: [1.1, 0.25, 0.4], off: [0.1, 0.27, 0], color: 0x3a3a3a }] }),
   B('bin', 'Trash Can', '🗑️', 'Fun', { shape: 'cyl', r: 0.35, h: 0.95, mat: 'metal', color: 0x3b7a4a }),
-  // Pallets: grab one with the Fling Line and it flies wherever you face (stand on it to ride!)
-  B('pallet', 'Flying Pallet', '🟫', 'Pallets', { shape: 'compound', mat: 'wood', special: 'pallet', hp: Infinity, collider: [1.6, 0.3, 1.2], parts: [
+  B('snowball', 'Snowball', '⚪', 'Fun', { shape: 'sphere', r: 0.35, mat: 'snow', splat: 0xffffff }),
+  B('cactus', 'Cactus', '🌵', 'Fun', { shape: 'compound', mat: 'cactus', parts: [
+    { t: 'cyl', r: 0.28, h: 2.2, off: [0, 0, 0], color: 0x3f8f3a },
+    { t: 'box', size: [0.7, 0.3, 0.3], off: [-0.45, 0.1, 0], color: 0x3f8f3a },
+    { t: 'box', size: [0.3, 0.8, 0.3], off: [-0.7, 0.55, 0], color: 0x3f8f3a },
+    { t: 'box', size: [0.6, 0.3, 0.3], off: [0.4, -0.3, 0], color: 0x3f8f3a },
+    { t: 'box', size: [0.3, 0.6, 0.3], off: [0.6, 0.0, 0], color: 0x3f8f3a }] }),
+  B('lamp', 'Street Lamp', '💡', 'Stuff', { shape: 'compound', mat: 'metal', parts: [
+    { t: 'box', size: [0.5, 0.15, 0.5], off: [0, -2.1, 0], color: 0x2d3138 },
+    { t: 'cyl', r: 0.08, h: 4.2, off: [0, 0, 0], color: 0x2d3138 },
+    { t: 'box', size: [0.9, 0.12, 0.3], off: [0.35, 2.1, 0], color: 0x2d3138 },
+    { t: 'box', size: [0.4, 0.12, 0.3], off: [0.7, 2.0, 0], color: 0xfff3b0 }] }),
+  B('mailbox', 'Mailbox', '📮', 'Stuff', { shape: 'compound', mat: 'metal', parts: [
+    { t: 'box', size: [0.12, 1.1, 0.12], off: [0, -0.35, 0], color: 0x555555 },
+    { t: 'box', size: [0.4, 0.4, 0.6], off: [0, 0.35, 0], color: 0x2a5bd7 }] }),
+  B('pallet', 'Pallet', '🟫', 'Build', { shape: 'compound', mat: 'wood', hp: 300, collider: [1.6, 0.3, 1.2], parts: [
     { t: 'box', size: [1.6, 0.05, 0.2], off: [0, 0.125, -0.5], tex: 'plank' },
     { t: 'box', size: [1.6, 0.05, 0.2], off: [0, 0.125, -0.25], tex: 'plank' },
     { t: 'box', size: [1.6, 0.05, 0.2], off: [0, 0.125, 0], tex: 'plank' },
@@ -153,7 +177,7 @@ export const CATALOG = [
     { t: 'box', size: [0.14, 0.2, 1.2], off: [0.7, 0, 0], tex: 'log' },
     { t: 'box', size: [1.6, 0.05, 0.2], off: [0, -0.125, -0.5], tex: 'plank' },
     { t: 'box', size: [1.6, 0.05, 0.2], off: [0, -0.125, 0.5], tex: 'plank' }] }),
-  B('pallet_big', 'Big Flying Pallet', '🟫', 'Pallets', { shape: 'compound', mat: 'wood', special: 'pallet', hp: Infinity, collider: [2.4, 0.3, 1.8], massMul: 1.2, parts: [
+  B('pallet_big', 'Big Pallet', '🟫', 'Build', { shape: 'compound', mat: 'wood', hp: 300, collider: [2.4, 0.3, 1.8], massMul: 1.2, parts: [
     { t: 'box', size: [2.4, 0.05, 0.2], off: [0, 0.125, -0.75], tex: 'plank' },
     { t: 'box', size: [2.4, 0.05, 0.2], off: [0, 0.125, -0.375], tex: 'plank' },
     { t: 'box', size: [2.4, 0.05, 0.2], off: [0, 0.125, 0], tex: 'plank' },
@@ -164,7 +188,7 @@ export const CATALOG = [
     { t: 'box', size: [0.14, 0.2, 1.8], off: [1.1, 0, 0], tex: 'log' },
     { t: 'box', size: [2.4, 0.05, 0.2], off: [0, -0.125, -0.75], tex: 'plank' },
     { t: 'box', size: [2.4, 0.05, 0.2], off: [0, -0.125, 0.75], tex: 'plank' }] }),
-  B('pallet_stack', 'Pallet Stack (5)', '🟫', 'Pallets', { prefab: 'pallets' }),
+  B('pallet_stack', 'Pallet Stack (5)', '🟫', 'Prefabs', { prefab: 'pallets' }),
   // Furniture & vehicles
   B('fridge', 'Fridge', '🧊', 'Stuff', { shape: 'box', size: [0.9, 1.9, 0.8], mat: 'appliance', tex: 'fridge' }),
   B('piano', 'Piano', '🎹', 'Stuff', { shape: 'compound', mat: 'wood', special: 'piano', parts: [
@@ -218,6 +242,14 @@ export const CATALOG = [
   B('pf_tntstack', 'TNT Stack', '🧨', 'Prefabs', { prefab: 'tntstack' }),
   B('pf_minefield', 'Mine Field', '⚠️', 'Prefabs', { prefab: 'minefield' }),
   B('pf_ballpit', 'Ball Pit Drop', '🔵', 'Prefabs', { prefab: 'ballpit' }),
+  B('pf_house', 'Wooden House', '🏠', 'Prefabs', { prefab: 'house' }),
+  B('pf_bridge', 'Bridge', '🌉', 'Prefabs', { prefab: 'bridge' }),
+  B('pf_skyscraper', 'Skyscraper', '🏢', 'Prefabs', { prefab: 'skyscraper' }),
+  B('pf_fort', 'Log Fort', '🛡️', 'Prefabs', { prefab: 'fort' }),
+  B('pf_arch', 'Stone Arch', '⛩️', 'Prefabs', { prefab: 'arch' }),
+  B('pf_stairs', 'Crate Stairs', '🪜', 'Prefabs', { prefab: 'stairs' }),
+  B('pf_igloo', 'Igloo', '🛖', 'Prefabs', { prefab: 'igloo' }),
+  B('pf_snowman', 'Snowman', '⛄', 'Prefabs', { prefab: 'snowman' }),
 ];
 export const ITEMS = Object.fromEntries(CATALOG.map((d) => [d.id, d]));
 ITEMS.pin = { id: 'pin', name: 'Pin', shape: 'cyl', r: 0.13, rt: 0.08, h: 0.8, mat: 'plastic', color: 0xffffff };
@@ -352,9 +384,10 @@ function onCollide(e) {
   if (!ent || ent.dead) return;
   const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
   const def = ent.def;
-  if (v > 3.5) sfx.thunk(v);
-  if (def.special === 'duck' && v > 2) sfx.squeak?.();
-  if (def.special === 'piano' && v > 3) sfx.piano?.(v);
+  const sp = e.target.position;
+  if (v > 3.5) sfx.impact(ent.frozen ? 'ice' : def.mat, v, sp);
+  if (def.special === 'duck' && v > 2) sfx.squeak(sp);
+  if (def.special === 'piano' && v > 3) sfx.piano(v, sp);
   if (def.special === 'balloon' && v > 9) { afterStep(() => popBalloon(ent)); return; }
   if (def.explosive) {
     const ex = def.explosive;
@@ -407,18 +440,18 @@ export function breakEnt(ent, dir, extra = 0) {
   removeEnt(ent);
   const brk = ent.frozen ? 'shards' : mat.brk;
   if (brk === 'shards') {
-    sfx.shatter();
+    sfx.shatter(pos);
     for (let i = 0; i < 26; i++) FX.particle({ pos: pos.clone().add(new THREE.Vector3(rand(-0.5, 0.5), rand(-0.5, 0.5), rand(-0.5, 0.5))), vel: vel.clone().add(new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4))), color: mat.color, size: rand(0.08, 0.22), life: rand(0.8, 1.5), gravity: 18, opacity: 0.8, spin: 8 });
     if (def.mat === 'crystal') FX.confetti(pos, 20, 6);
     return;
   }
   if (brk === 'splat') {
-    sfx.splat?.();
+    sfx.splat(pos);
     FX.debris(pos, def.splat ?? 0xff3b4a, 24, 0.22, 7);
     FX.debris(pos, 0x2f7a22, 8, 0.15, 5);
     return;
   }
-  sfx.crack();
+  if (['stone', 'brick', 'rock', 'concrete'].includes(def.mat)) sfx.crumble(pos); else sfx.crack(pos);
   FX.debris(pos, mat.color, 10, 0.18, 5);
   FX.smoke(pos, 2, 0x9b8b70, 0.5);
   if (def.special === 'present') {
@@ -483,7 +516,7 @@ export function detonate(ent, delay = 0) {
 }
 
 function startGasRocket(ent) {
-  sfx.hiss?.();
+  sfx.hiss(ent.body.position);
   ent.thrusters.push({ lp: new CANNON.Vec3(0, -0.5 * ent.scale, 0), ld: new CANNON.Vec3(0, 1, 0), t: 1.8, power: 45, wobble: true, end: () => {
     if (ent.dead) return;
     const pos = tv(ent.body.position); removeEnt(ent, true); explode(pos, 0.8);
@@ -503,11 +536,11 @@ export function launchFireworks(pos, n = 1) {
     later(i * 0.18, () => {
       const p = pos.clone();
       const v = new THREE.Vector3(rand(-4, 4), rand(22, 30), rand(-4, 4));
-      sfx.whistle?.();
+      sfx.whistle(1.2, p);
       G.projectiles.push({
         pos: p, vel: v, t: 0, life: rand(0.9, 1.3), gravity: 6,
         trail: (pp) => FX.particle({ pos: pp, vel: new THREE.Vector3(rand(-1, 1), -2, rand(-1, 1)), color: 0xffd27a, size: 0.12, life: 0.5, glow: true, add: true, gravity: 2 }),
-        end: (pp) => { FX.confetti(pp, 70, 14); sfx.pop(); explode(pp, 0.25, { quiet: true }); },
+        end: (pp) => { FX.confetti(pp, 70, 14); sfx.pop(pp); explode(pp, 0.25, { quiet: true }); },
       });
     });
   }
@@ -521,7 +554,8 @@ export function explode(pos, power = 1, opts = {}) {
   FX.explosionFx(pos, vis);
   if (opts.fire) for (let i = 0; i < 18; i++) FX.particle({ pos, vel: new THREE.Vector3(rand(-8, 8), rand(5, 14), rand(-8, 8)), color: 0xff7a1a, size: 0.3, life: rand(1.5, 2.5), glow: true, add: true, gravity: 14, drag: 0.2 });
   if (pos.y < G.waterY + 1.5) FX.splash(pos, 30, 1.6);
-  sfx.explosion(Math.min(1.5, power));
+  if (G.crater && !opts.quiet) G.crater(pos, power);
+  sfx.explosion(Math.min(1.5, power), pos);
   if (power >= 3.5) { FX.flashAt(pos, 400, 0xffffff); document.getElementById('whiteflash').classList.add('on'); setTimeout(() => document.getElementById('whiteflash').classList.remove('on'), 120); }
   const pd = G.player ? G.player.pos().distanceTo(pos) : 99;
   G.shake = Math.min(2.5, G.shake + Math.max(0, power * 1.4 - pd / (18 * Math.sqrt(power))));
@@ -574,7 +608,7 @@ export function explode(pos, power = 1, opts = {}) {
 // ---------------------------------------------------------------- balloons / ropes / welds
 export function popBalloon(ent) {
   if (ent.dead) return;
-  sfx.pop();
+  sfx.pop(ent.body.position);
   FX.debris(tv(ent.body.position), ent.mesh.material.color.getHex(), 10, 0.12, 4);
   removeEnt(ent, true);
 }
@@ -704,6 +738,7 @@ export function updateEnts(dt) {
   for (const e of [...G.ents]) {
     if (e.dead) continue;
     const b = e.body;
+    if (!Number.isFinite(b.position.x + b.position.y + b.position.z)) { if (e.kind === 'ragpart') e.dummy.respawn(); else removeEnt(e, true); continue; }
     if (b.position.y < (G.killY ?? -30) - 15 || Math.abs(b.position.x) > 400 || Math.abs(b.position.z) > 400) {
       if (e.kind === 'ragpart') e.dummy.respawn(); else removeEnt(e, true);
       continue;
@@ -713,7 +748,7 @@ export function updateEnts(dt) {
     if (e.burn > 0) updateBurn(e, dt);
     // splash when entering water
     const inW = b.position.y < G.waterY;
-    if (inW && !e.wet && b.velocity.length() > 4) { FX.splash(tv(b.position), 10, clamp(b.mass / 40, 0.5, 1.6)); sfx.splash?.(); }
+    if (inW && !e.wet && b.velocity.length() > 4) { FX.splash(tv(b.position), 10, clamp(b.mass / 40, 0.5, 1.6)); sfx.splash(b.position); }
     e.wet = inW;
     if (e.frozen > 0) { e.frozen -= dt; if (e.frozen <= 0) unfreeze(e); }
     if (e.antigrav > 0) {
@@ -734,7 +769,7 @@ export function updateEnts(dt) {
       const blink = (Math.sin(G.time * (e.fuse < 1 ? 40 : 18)) > 0);
       e.mesh.scale.setScalar(e.scale * (blink ? 1.08 : 1));
       if (Math.random() < 0.5) FX.particle({ pos: tv(b.position).add(new THREE.Vector3(0, 0.5 * e.scale, 0)), vel: new THREE.Vector3(rand(-1, 1), 2, rand(-1, 1)), color: 0xffe08a, size: 0.08, life: 0.3, glow: true, add: true, gravity: 2 });
-      sfx.fuse();
+      sfx.fuse(b.position);
       if (e.fuse <= 0) { e.fuse = null; if (e.onFuse) e.onFuse(); else detonate(e, 0); }
     }
     if (e.def.special === 'balloon' && b.position.y > 120) popBalloon(e);
@@ -878,6 +913,47 @@ export function buildPrefab(kind, pos, yaw = 0, spawned = true, sleep = false) {
     for (let l = 0; l < 3; l++) for (let i = 0; i < 3 - l; i++) for (let j = 0; j < 3 - l; j++) put('tnt', (i - (2 - l) / 2) * 0.92, 0.45 + l * 0.91, (j - (2 - l) / 2) * 0.92);
   } else if (kind === 'minefield') {
     for (let i = 0; i < 12; i++) put('mine', rand(-6, 6), 0.08, rand(-6, 6) - 8);
+  } else if (kind === 'house') {
+    const W = (sx, sy, sz) => ({ ...ITEMS.chunk, size: [sx, sy, sz], mat: 'wood', tex: 'plank' });
+    createEnt(W(1.8, 2.4, 0.2), yawed(pos, -1.6, 1.2, 2, yaw), o); createEnt(W(1.8, 2.4, 0.2), yawed(pos, 1.6, 1.2, 2, yaw), o);
+    createEnt(W(1.4, 0.6, 0.2), yawed(pos, 0, 2.1, 2, yaw), o);
+    createEnt(W(5, 2.4, 0.2), yawed(pos, 0, 1.2, -2, yaw), o);
+    createEnt(W(0.2, 2.4, 3.8), yawed(pos, -2.4, 1.2, 0, yaw), o); createEnt(W(0.2, 2.4, 3.8), yawed(pos, 2.4, 1.2, 0, yaw), o);
+    createEnt(W(5.4, 0.2, 4.6), yawed(pos, 0, 2.52, 0, yaw), o);
+    put('table', 0, 0.45, -0.6);
+  } else if (kind === 'bridge') {
+    for (const z of [-4.5, 4.5]) for (const x of [-1, 1]) for (let l = 0; l < 3; l++) put('stone', x, 0.5 + l * 1.005, z);
+    const beam = { ...ITEMS.chunk, size: [0.3, 0.3, 10.2], mat: 'wood', tex: 'log' };
+    createEnt(beam, yawed(pos, -1, 3.17, 0, yaw), o); createEnt(beam, yawed(pos, 1, 3.17, 0, yaw), o);
+    for (let i = 0; i < 18; i++) put('plank', 0, 3.43, -4.4 + i * 0.52);
+  } else if (kind === 'skyscraper') {
+    for (let l = 0; l < 6; l++) for (let a = 0; a < 3; a++) for (let b = 0; b < 2; b++) put('concrete_big', (a - 1) * 2.01, 1 + l * 2.004, (b - 0.5) * 2.01);
+  } else if (kind === 'fort') {
+    const log = { ...ITEMS.log, rot: undefined, h: 3, r: 0.28 };
+    for (let i = 0; i < 22; i++) { const a = (i / 24) * Math.PI * 2; createEnt(log, yawed(pos, Math.cos(a) * 5, 1.5, Math.sin(a) * 5, yaw), o); }
+    put('barrel', 0, 0.6, 0); put('crate', 1.5, 0.5, 1);
+  } else if (kind === 'arch') {
+    for (const x of [-1.3, 1.3]) for (let l = 0; l < 3; l++) put('stone', x, 0.5 + l * 1.005, 0);
+    createEnt({ ...ITEMS.slab, size: [3.8, 0.6, 1] }, yawed(pos, 0, 3.32, 0, yaw), o);
+  } else if (kind === 'stairs') {
+    for (let s = 0; s < 5; s++) for (let h = 0; h <= s; h++) put('crate', 0, 0.5 + h * 1.001, -s * 1.01);
+  } else if (kind === 'igloo') {
+    for (let ring = 0; ring < 3; ring++) {
+      const r = 2.4 - ring * 0.55, n = 12 - ring * 3;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + ring * 0.3;
+        if (ring === 0 && i === 0) continue; // door
+        createEnt({ ...ITEMS.ice, size: [0.9, 0.7, 0.6] }, yawed(pos, Math.cos(a) * r, 0.35 + ring * 0.71, Math.sin(a) * r, yaw), { ...o, quat: yq(yaw - a - Math.PI / 2) });
+      }
+    }
+    createEnt({ ...ITEMS.ice, size: [1.4, 0.4, 1.4] }, yawed(pos, 0, 2.35, 0, yaw), o);
+  } else if (kind === 'snowman') {
+    const ball = (r) => ({ ...ITEMS.snowball, r });
+    const a = createEnt(ball(0.75), yawed(pos, 0, 0.75, 0, yaw), o);
+    const b = createEnt(ball(0.52), yawed(pos, 0, 1.97, 0, yaw), o);
+    const c = createEnt(ball(0.36), yawed(pos, 0, 2.82, 0, yaw), o);
+    const nose = createEnt({ id: 'carrot', shape: 'cyl', r: 0.07, rt: 0.01, h: 0.35, mat: 'fruit', color: 0xff7b00, splat: 0xff7b00 }, yawed(pos, 0, 2.82, 0.45, yaw), { ...o, quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, yaw, 0, 'YXZ')) });
+    addWeld(a.body, b.body); addWeld(b.body, c.body); addWeld(c.body, nose.body);
   } else if (kind === 'pallets') {
     for (let i = 0; i < 5; i++) put('pallet', 0, 0.15 + i * 0.31, 0);
   } else if (kind === 'ballpit') {
@@ -890,7 +966,7 @@ export { dummyFromBody };
 
 // ---------------------------------------------------------------- fire
 // flammability per material (0 = won't burn)
-const FLAM = { wood: 1, foam: 1.3, fruit: 0.25, tnt: 1, car: 0.5, appliance: 0.2, balloon: 1, plastic: 0.4, rubber: 0.3, beach: 1, jelly: 0, flesh: 1, bouncyflesh: 1 };
+const FLAM = { hay: 1.5, cactus: 0.3, wood: 1, foam: 1.3, fruit: 0.25, tnt: 1, car: 0.5, appliance: 0.2, balloon: 1, plastic: 0.4, rubber: 0.3, beach: 1, jelly: 0, flesh: 1, bouncyflesh: 1 };
 
 export function ignite(e, t = 8) {
   if (!e || e.dead) return;
@@ -915,13 +991,14 @@ function updateBurn(e, dt) {
   const b = e.body;
   if (b.position.y < G.waterY) {
     e.burn = 0; G.burning--;
-    FX.smoke(tv(b.position), 5, 0xdddddd, 0.6); sfx.sizzle?.();
+    FX.smoke(tv(b.position), 5, 0xdddddd, 0.6); sfx.sizzle(b.position);
     return;
   }
   e.burn -= dt;
   const p = tv(b.position);
   const sz = (e.def.size ? Math.max(...e.def.size) : (e.def.r ?? 0.5) * 2) * e.scale;
   if (Math.random() < 0.7) FX.particle({ pos: p.clone().add(new THREE.Vector3(rand(-0.4, 0.4) * sz, rand(0, 0.4) * sz, rand(-0.4, 0.4) * sz)), vel: new THREE.Vector3(rand(-0.5, 0.5), rand(2, 4), rand(-0.5, 0.5)), color: Math.random() < 0.5 ? 0xff7a1a : 0xffc04a, size: rand(0.2, 0.4) * Math.min(2, sz), life: rand(0.4, 0.8), glow: true, add: true, gravity: -2, drag: 1, floor: false });
+  if (Math.random() < 0.15) sfx.fire(p);
   if (Math.random() < 0.08) FX.smoke(p.clone().add(new THREE.Vector3(0, sz * 0.6, 0)), 1, 0x333333, 0.5 * Math.min(2, sz));
   e.mesh.traverse((m) => { if (m.isMesh && m.userData.charClone) m.material.color.lerp(_black, dt * 0.12); });
   if (e.hp !== Infinity && !e.def.explosive) { e.hp -= dt * 9; if (e.hp <= 0) { G.burning--; e.burn = 0; breakEnt(e, null); return; } }

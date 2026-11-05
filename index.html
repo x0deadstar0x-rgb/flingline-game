@@ -4,84 +4,124 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fling Zone</title>
-<meta name="description" content="A 3D low-poly physics sandbox: fling things and dummies with your grab line, blow stuff up, ride flying pallets.">
+<meta name="description" content="A 3D low-poly physics sandbox: grab things with your line, throw them, blow everything up.">
 <style>
-  :root { --ui: rgba(15, 18, 28, 0.72); --line: rgba(255,255,255,0.14); --txt: #f3f6ff; --dim: #a9b3c9; --acc: #5ff4ff; }
+  :root {
+    --bg: #0b0b0b; --panel: #111111; --panel2: #171717; --line: rgba(255,255,255,0.14); --line2: rgba(255,255,255,0.32);
+    --txt: #f4f4f4; --dim: #8c8c8c; --font: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1020; color: var(--txt); font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; user-select: none; -webkit-user-select: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--txt); font-family: var(--font); user-select: none; -webkit-user-select: none; }
   canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  button { font: inherit; color: inherit; }
   .hidden { display: none !important; }
+  /* emoji icons drawn as monochrome silhouettes */
+  .i { filter: grayscale(1) brightness(0) invert(1); line-height: 1; }
+  .on > .i, .card:hover > .i, .hslot:hover > .i { filter: grayscale(1) brightness(0); }
 
-  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 35%, rgba(40,70,140,0.85), rgba(8,10,22,0.95)); cursor: pointer; }
-  #start .box { text-align: center; max-width: 760px; padding: 24px; }
-  #start h1 { font-size: clamp(42px, 8vw, 88px); margin: 0; letter-spacing: 2px; font-weight: 900; color: #fff; text-shadow: 0 6px 0 #1a6bd6, 0 12px 30px rgba(0,0,0,0.5); transform: rotate(-2deg); }
-  #start h1 span { color: #ffd23f; text-shadow: 0 6px 0 #d46a00, 0 12px 30px rgba(0,0,0,0.5); }
-  #start .sub { color: var(--dim); margin: 14px 0 22px; font-size: 17px; }
-  #start .go { display: inline-block; background: #ffd23f; color: #1b1b1b; font-weight: 800; font-size: 22px; padding: 14px 34px; border-radius: 14px; box-shadow: 0 6px 0 #b37a00; animation: bob 1.2s ease-in-out infinite; }
-  #start .keys { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 18px; text-align: left; font-size: 14px; color: var(--dim); }
-  #start .keys b { color: #fff; }
-  @keyframes bob { 50% { transform: translateY(-4px); } }
+  /* ---------- start screen */
+  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(5,5,5,0.92); cursor: pointer; }
+  #start .box { width: min(720px, 92vw); }
+  #start .eyebrow { font: 600 12px var(--mono); letter-spacing: 4px; color: var(--dim); }
+  #start h1 { font-size: clamp(54px, 11vw, 120px); margin: 8px 0 0; font-weight: 900; letter-spacing: -3px; line-height: 0.9; }
+  #start h1 span { -webkit-text-stroke: 2px #fff; color: transparent; }
+  #start .sub { color: var(--dim); margin: 18px 0 28px; font-size: 16px; max-width: 520px; }
+  #start .go { display: inline-flex; align-items: center; gap: 12px; background: #fff; color: #000; font-weight: 800; font-size: 15px; letter-spacing: 2px; padding: 16px 28px; border: 0; }
+  #start .go::after { content: "→"; font-size: 18px; }
+  #start .keys { margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); border-top: 1px solid var(--line); }
+  #start .keys div { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--dim); display: flex; gap: 10px; }
+  #start kbd, .help kbd { font: 600 11px var(--mono); color: #fff; border: 1px solid var(--line2); padding: 2px 6px; min-width: 22px; text-align: center; }
 
-  #paused { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(5,8,18,0.45); cursor: pointer; font-size: 22px; font-weight: 700; }
+  #paused { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); cursor: pointer; font: 700 14px var(--mono); letter-spacing: 3px; }
   #paused.show { display: flex; }
 
-  #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; --c: #fff; }
-  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: var(--c); box-shadow: 0 0 3px #000; }
-  #crosshair::before { left: 10px; top: 2px; width: 2px; height: 18px; }
-  #crosshair::after { top: 10px; left: 2px; height: 2px; width: 18px; }
-  #crosshair.grab { width: 30px; height: 30px; border: 2px solid var(--c); border-radius: 50%; box-shadow: 0 0 6px var(--c); }
+  /* ---------- HUD */
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,0.9); }
+  #crosshair::before { left: 8px; top: 2px; width: 2px; height: 14px; }
+  #crosshair::after { top: 8px; left: 2px; height: 2px; width: 14px; }
+  #crosshair.grab { width: 26px; height: 26px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 3px rgba(0,0,0,0.8); }
   #crosshair.grab::before, #crosshair.grab::after { display: none; }
-
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 6; }
-  #stats { position: fixed; left: 14px; top: 12px; background: var(--ui); border: 1px solid var(--line); padding: 8px 12px; border-radius: 10px; font-size: 14px; line-height: 1.5; }
-  #stats .dim { color: var(--dim); font-size: 12px; }
-  #helpbtn { position: fixed; right: 14px; top: 12px; background: var(--ui); border: 1px solid var(--line); padding: 8px 12px; border-radius: 10px; font-size: 13px; color: var(--dim); }
-  #helpbtn b { color: #fff; }
-  #toolinfo { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 4px #000; max-width: 92vw; }
-  #toolname { font-weight: 800; font-size: 18px; }
-  #toolhint { color: #dfe6f7; font-size: 13px; margin-top: 2px; }
-  #toolnote { color: #ffd23f; font-size: 14px; font-weight: 700; margin-top: 4px; }
-  #hotbar { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 6px; pointer-events: auto; }
-  .slot { --c: #fff; position: relative; width: 66px; height: 74px; background: var(--ui); border: 2px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: transform .08s; }
-  .slot.on { border-color: var(--c); box-shadow: 0 0 0 2px var(--c), 0 0 18px var(--c); transform: translateY(-6px); }
-  .slot .k { position: absolute; left: 6px; top: 3px; font-size: 11px; color: var(--dim); font-weight: 700; }
-  .slot .i { font-size: 26px; line-height: 1; }
-  .slot .n { font-size: 9.5px; color: #dfe6f7; margin-top: 5px; text-align: center; line-height: 1.05; max-width: 60px; overflow: hidden; max-height: 21px; }
-  @media (max-width: 760px) { .slot { width: 46px; height: 56px; } .slot .n { display: none; } .slot .i { font-size: 20px; } #toolinfo { bottom: 74px; } }
+  #stats { position: fixed; left: 16px; top: 14px; font: 600 11px var(--mono); letter-spacing: 1px; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+  #stats .row { display: flex; gap: 6px; align-items: baseline; }
+  #stats .row span { color: rgba(255,255,255,0.65); }
+  #stats .row b { color: #fff; margin-right: 10px; font-size: 13px; }
+  #stats .dim { color: rgba(255,255,255,0.55); margin-top: 4px; }
+  #helpbtn { position: fixed; right: 16px; top: 14px; font: 600 11px var(--mono); letter-spacing: 1px; color: rgba(255,255,255,0.75); text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+  #helpbtn kbd { font: inherit; color: #fff; border: 1px solid rgba(255,255,255,0.5); padding: 1px 5px; margin-right: 4px; }
+  #toolinfo { position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%); text-align: center; text-shadow: 0 1px 3px rgba(0,0,0,0.85); max-width: 92vw; }
+  #toolname { font-weight: 800; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
+  #toolhint { color: rgba(255,255,255,0.8); font-size: 12px; margin-top: 3px; }
+  #toolnote { color: #fff; font: 700 12px var(--mono); margin-top: 5px; }
+  #hotbar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 4px; }
+  .slot { position: relative; width: 54px; height: 54px; background: rgba(10,10,10,0.72); border: 1px solid rgba(255,255,255,0.22); display: flex; align-items: center; justify-content: center; }
+  .slot .k { position: absolute; left: 5px; top: 3px; font: 600 9px var(--mono); color: rgba(255,255,255,0.6); }
+  .slot .i { font-size: 24px; }
+  .slot.on { background: #fff; border-color: #fff; }
+  .slot.on .k { color: #000; }
+  @media (max-width: 700px) { .slot { width: 40px; height: 44px; } .slot .i { font-size: 18px; } #toolinfo { bottom: 66px; } }
 
-  #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); background: var(--ui); border: 1px solid var(--line); padding: 8px 16px; border-radius: 10px; font-weight: 700; opacity: 0; transition: opacity .25s; z-index: 7; pointer-events: none; text-align: center; }
+  #toast { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); background: #000; color: #fff; border: 1px solid #fff; padding: 9px 16px; font: 700 12px var(--mono); letter-spacing: 1.5px; text-transform: uppercase; opacity: 0; transition: opacity .2s; z-index: 7; pointer-events: none; }
   #popups { position: fixed; inset: 0; pointer-events: none; z-index: 6; overflow: hidden; }
-  .popup { position: absolute; left: 0; top: 0; font-weight: 900; white-space: nowrap; text-shadow: 0 2px 0 #000, 0 0 10px rgba(0,0,0,0.6); }
+  .popup { position: absolute; left: 0; top: 0; font-weight: 900; white-space: nowrap; letter-spacing: 1px; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.6); }
   #whiteflash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 30; transition: opacity 1.2s; }
   #whiteflash.on { opacity: 0.9; transition: none; }
 
-  #menu { position: fixed; inset: 0; z-index: 45; display: none; align-items: center; justify-content: center; background: rgba(5,8,18,0.55); }
-  #menu.open { display: flex; }
-  #menu .panel { width: min(1100px, 94vw); height: min(760px, 90vh); background: rgba(18,22,36,0.96); border: 1px solid var(--line); border-radius: 18px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.6); }
-  #menu .top { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  #menu .top .title { font-weight: 900; font-size: 20px; margin-right: 10px; }
-  #menutabs { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
-  #menutabs button, #menuclose { background: #262c44; color: #fff; border: 1px solid var(--line); padding: 8px 14px; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 14px; }
-  #menutabs button.on { background: #ffd23f; color: #1b1b1b; }
-  #menuclose { background: #3a2230; }
-  #menubody { padding: 10px 16px 24px; overflow-y: auto; flex: 1; }
-  #menubody h3 { margin: 16px 0 8px; font-size: 15px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
-  #menubody .note { color: var(--dim); margin: 6px 0; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
-  .grid.small { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-  .card { --c: #5ff4ff; background: #20263b; border: 1px solid var(--line); color: #fff; border-radius: 12px; padding: 10px; text-align: left; cursor: pointer; display: grid; grid-template-columns: 34px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; font: inherit; }
-  .card:hover { background: #2b3350; border-color: var(--c); }
-  .card.on { border-color: #ffd23f; box-shadow: 0 0 0 1px #ffd23f; }
-  .card .i { font-size: 26px; grid-row: span 2; text-align: center; }
-  .card .n { font-weight: 800; font-size: 14px; }
-  .card .s { font-size: 11.5px; color: var(--dim); line-height: 1.3; }
-  .grid.small .card { grid-template-columns: 28px 1fr; padding: 8px; }
-  .grid.small .card .i { font-size: 22px; }
-  .grid.small .card .n { font-size: 12.5px; }
-  .help { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 6px 24px; font-size: 14px; }
-  .help div { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
-  .help b { display: inline-block; min-width: 110px; color: #ffd23f; }
+  /* ---------- menu */
+  #menu { position: fixed; inset: 0; z-index: 45; display: none; background: rgba(0,0,0,0.6); backdrop-filter: blur(6px); }
+  #menu.open { display: flex; align-items: center; justify-content: center; }
+  #menu .panel { width: min(1180px, 96vw); height: min(780px, 92vh); background: var(--panel); border: 1px solid var(--line); display: grid; grid-template-columns: 210px 1fr; overflow: hidden; }
+  #menunav { border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 22px 0; }
+  #menunav .brand { font-weight: 900; font-size: 20px; letter-spacing: -0.5px; padding: 0 22px 22px; }
+  #menunav .brand span { -webkit-text-stroke: 1px #fff; color: transparent; }
+  #menunav button { background: none; border: 0; text-align: left; padding: 12px 22px; font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); cursor: pointer; border-left: 2px solid transparent; }
+  #menunav button:hover { color: #fff; }
+  #menunav button.on { color: #fff; border-left-color: #fff; background: var(--panel2); }
+  #menunav .spacer { flex: 1; }
+  #menuclose { margin: 0 22px; background: #fff !important; color: #000 !important; border-left: 0 !important; text-align: center !important; padding: 12px !important; }
+  #menunav .tip { font: 600 10px var(--mono); color: var(--dim); padding: 10px 22px 0; letter-spacing: 1px; }
+  #menumain { display: flex; flex-direction: column; min-height: 0; }
+  #menuhead { padding: 22px 26px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+  #menuhead .t { flex: 1; min-width: 200px; }
+  #menutitle { font-size: 30px; font-weight: 900; letter-spacing: -1px; }
+  #menusub { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  #menusearch { width: 260px; background: transparent; border: 1px solid var(--line2); color: #fff; padding: 10px 12px; font: 600 13px var(--mono); outline: none; }
+  #menusearch:focus { border-color: #fff; }
+  #menusearch::placeholder { color: var(--dim); }
+  #hbedit { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; padding: 14px 26px; border-bottom: 1px solid var(--line); }
+  .hslot { position: relative; background: transparent; border: 1px solid var(--line2); height: 66px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 0 2px; }
+  .hslot .k { position: absolute; left: 5px; top: 3px; font: 600 9px var(--mono); color: var(--dim); }
+  .hslot .i { font-size: 22px; }
+  .hslot .n { font-size: 9.5px; color: var(--dim); max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .hslot:hover, .hslot.on { background: #fff; border-color: #fff; }
+  .hslot:hover .n, .hslot.on .n, .hslot:hover .k, .hslot.on .k { color: #000; }
+  #menubody { padding: 6px 26px 30px; overflow-y: auto; flex: 1; }
+  #menubody::-webkit-scrollbar { width: 8px; } #menubody::-webkit-scrollbar-thumb { background: #333; }
+  #menubody h3 { margin: 22px 0 10px; font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 3px; display: flex; gap: 10px; align-items: center; }
+  #menubody h3::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  #menubody h3 span { font-family: var(--mono); color: #555; letter-spacing: 1px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .grid.small { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .grid.wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .card { position: relative; background: var(--panel); border: 0; text-align: left; cursor: pointer; display: flex; gap: 14px; align-items: center; padding: 14px 16px; min-height: 64px; }
+  .card .i { font-size: 22px; width: 26px; text-align: center; flex: none; }
+  .card .txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .card .n { font-weight: 700; font-size: 13.5px; }
+  .card .s { font-size: 11.5px; color: var(--dim); line-height: 1.35; }
+  .card .badge { position: absolute; right: 8px; top: 7px; font: 700 10px var(--mono); border: 1px solid currentColor; padding: 0 4px; }
+  .card:hover, .card.on { background: #fff; color: #000; }
+  .card:hover .s, .card.on .s { color: #444; }
+  .grid.small .card { min-height: 52px; padding: 10px 12px; }
+  .grid.wide .card { min-height: 84px; }
+  .grid.wide .card .i { font-size: 30px; width: 36px; }
+  .empty { color: var(--dim); padding: 30px 0; }
+  .help { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); column-gap: 30px; font-size: 13px; }
+  .help div { padding: 9px 0; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; color: #ddd; }
+  .help div kbd { flex: none; }
   #helptext { display: none; }
+  @media (max-width: 760px) { #menu .panel { grid-template-columns: 1fr; } #menunav { flex-direction: row; flex-wrap: wrap; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); } #menunav .brand, #menunav .spacer, #menunav .tip { display: none; } #hbedit { grid-template-columns: repeat(5, 1fr); } #menusearch { width: 100%; } }
 </style>
 </head>
 <body>
@@ -89,7 +129,7 @@
 
 <div id="hud">
   <div id="stats"></div>
-  <div id="helpbtn"><b>TAB</b> menu · <b>H</b> help</div>
+  <div id="helpbtn"><kbd>TAB</kbd>MENU</div>
   <div id="crosshair"></div>
   <div id="toolinfo"><div id="toolname"></div><div id="toolhint"></div><div id="toolnote"></div></div>
   <div id="hotbar"></div>
@@ -97,81 +137,82 @@
 <div id="toast"></div>
 <div id="popups"></div>
 <div id="whiteflash"></div>
-<div id="paused">⏸ Paused — click to keep playing</div>
+<div id="paused">PAUSED — CLICK TO PLAY</div>
 
 <div id="menu">
   <div class="panel">
-    <div class="top">
-      <span class="title">FLING ZONE</span>
-      <div id="menutabs">
-        <button data-tab="tools">🛠 Tools</button>
-        <button data-tab="items">📦 Spawn Items</button>
-        <button data-tab="maps">🗺 Maps</button>
-        <button data-tab="help">❓ Controls</button>
+    <nav id="menunav">
+      <div class="brand">FLING <span>ZONE</span></div>
+      <button data-tab="tools">Tools</button>
+      <button data-tab="items">Spawn</button>
+      <button data-tab="maps">Maps</button>
+      <button data-tab="help">Controls</button>
+      <div class="spacer"></div>
+      <button id="menuclose">Play</button>
+      <div class="tip">TAB / ESC TO CLOSE</div>
+    </nav>
+    <section id="menumain">
+      <div id="menuhead">
+        <div class="t"><div id="menutitle"></div><div id="menusub"></div></div>
+        <input id="menusearch" type="text" placeholder="Search…" autocomplete="off" spellcheck="false">
       </div>
-      <button id="menuclose">Close (TAB)</button>
-    </div>
-    <div id="menubody"></div>
+      <div id="hbedit"></div>
+      <div id="menubody"></div>
+    </section>
   </div>
 </div>
 
 <div id="helptext">
-  <h3>Controls — single click + keyboard only (no right-click / two-finger click needed)</h3>
+  <h3>Moving</h3>
   <div class="help">
-    <div><b>Mouse / touchpad</b> look around</div>
-    <div><b>Arrow keys</b> also look around</div>
-    <div><b>Click</b> use tool (hold for auto tools)</div>
-    <div><b>Enter</b> same as click</div>
-    <div><b>W A S D</b> move</div>
-    <div><b>Space</b> jump (double jump!)</div>
-    <div><b>Shift</b> sprint / fly down</div>
-    <div><b>1 – 0</b> pick hotbar slot</div>
-    <div><b>Q / E</b> swap tool in this slot</div>
-    <div><b>TAB or B</b> menu: all tools, items, maps</div>
-    <div><b>T</b> next spawn item</div>
-    <div><b>N</b> fly mode</div>
-    <div><b>G</b> slow-motion</div>
-    <div><b>C</b> clear everything you spawned</div>
-    <div><b>P</b> reset the map</div>
-    <div><b>M</b> mute</div>
-    <div><b>L</b> low / high graphics</div>
-    <div><b>[ / ]</b> mouse sensitivity</div>
-    <div><b>Esc</b> free the mouse</div>
+    <div><kbd>MOUSE</kbd> look (arrow keys work too)</div>
+    <div><kbd>W A S D</kbd> move</div>
+    <div><kbd>SPACE</kbd> jump · double jump</div>
+    <div><kbd>SHIFT</kbd> sprint · fly down</div>
+    <div><kbd>N</kbd> fly mode</div>
+    <div><kbd>G</kbd> slow motion</div>
   </div>
-  <h3>Fling Line (slot 1)</h3>
+  <h3>Fling Line</h3>
   <div class="help">
-    <div><b>Click</b> shoot your line &amp; grab</div>
-    <div><b>Click again</b> THROW it where you look</div>
-    <div><b>F</b> drop it</div>
-    <div><b>Z / X</b> shorten / extend the line</div>
-    <div><b>R</b> spin what you hold</div>
-    <div><b>Pallets</b> grab one and it flies where you look. Stand on it first to ride it! Z/X = slower / faster</div>
+    <div><kbd>CLICK</kbd> grab with your line</div>
+    <div><kbd>CLICK</kbd> again to drop</div>
+    <div><kbd>F</kbd> THROW it where you look</div>
+    <div><kbd>Z / X</kbd> shorter / longer line</div>
+    <div><kbd>R</kbd> spin what you hold</div>
   </div>
-  <h3>How things interact</h3>
+  <h3>Tools</h3>
   <div class="help">
-    <div>TNT, barrels &amp; mines set each other off in chains</div>
-    <div>Fire spreads across wood and cooks off explosives</div>
-    <div>Glass shatters, wood splinters, stone crumbles</div>
-    <div>Frozen things break way easier and thaw in explosions</div>
-    <div>Things float or sink in water depending on material</div>
-    <div>Dummies ragdoll when hit, then get back up</div>
-    <div>Balloons lift whatever they're tied to</div>
-    <div>Jump pads launch anything that touches them</div>
+    <div><kbd>CLICK</kbd> use tool (hold for auto)</div>
+    <div><kbd>ENTER</kbd> same as click</div>
+    <div><kbd>1 – 0</kbd> hotbar slots</div>
+    <div><kbd>Q / E</kbd> swap tool in this slot</div>
+    <div><kbd>T</kbd> next spawn item</div>
+    <div><kbd>TAB / B</kbd> this menu</div>
+  </div>
+  <h3>Other</h3>
+  <div class="help">
+    <div><kbd>C</kbd> clear what you spawned</div>
+    <div><kbd>P</kbd> reset the map</div>
+    <div><kbd>M</kbd> mute</div>
+    <div><kbd>L</kbd> low / high graphics</div>
+    <div><kbd>[ / ]</kbd> mouse sensitivity</div>
+    <div><kbd>ESC</kbd> free the mouse</div>
   </div>
 </div>
 
 <div id="start">
   <div class="box">
-    <h1>FLING <span>ZONE</span></h1>
-    <div class="sub">Grab it. Fling it. Blow it up. A low-poly physics sandbox.</div>
-    <div class="go">CLICK TO PLAY</div>
+    <div class="eyebrow">PHYSICS SANDBOX</div>
+    <h1>FLING<br><span>ZONE</span></h1>
+    <div class="sub">Grab anything with your line. Throw it. Blow it up. Dig craters. Eight maps, 34 tools, 90 things to spawn.</div>
+    <button class="go">CLICK TO PLAY</button>
     <div class="keys">
-      <div><b>WASD</b> move · <b>Space</b> jump</div>
-      <div><b>Click</b> grab / use tool</div>
-      <div><b>Click again</b> fling!</div>
-      <div><b>1-0</b> tools · <b>TAB</b> menu</div>
-      <div><b>Z / X</b> reel line · <b>F</b> drop</div>
-      <div><b>N</b> fly · <b>G</b> slow-mo</div>
+      <div><kbd>WASD</kbd> move</div>
+      <div><kbd>CLICK</kbd> grab / drop</div>
+      <div><kbd>F</kbd> throw</div>
+      <div><kbd>Z X</kbd> line length</div>
+      <div><kbd>1-0</kbd> tools</div>
+      <div><kbd>TAB</kbd> menu</div>
     </div>
   </div>
 </div>

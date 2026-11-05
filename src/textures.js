@@ -172,6 +172,17 @@ export const TEX = {
     g.fillStyle = '#9d8cf2'; for (let i = 0; i < 8; i++) g.fillRect(i * 8, 0, 3, s);
   }),
   jelly: () => make('jelly', 16, (g, s) => { g.fillStyle = '#ff4fa3'; g.fillRect(0, 0, s, s); }),
+  concrete: () => make('concrete', 64, (g, s) => {
+    g.fillStyle = '#a8a8a2'; g.fillRect(0, 0, s, s);
+    speckle(g, s, 260, ['#9d9d97', '#b3b3ad', '#929289'], 1, 3);
+    g.fillStyle = '#86867f'; g.fillRect(0, 0, s, 2); g.fillRect(0, 0, 2, s);
+  }),
+  hay: () => make('hay', 64, (g, s) => {
+    g.fillStyle = '#d9b64a'; g.fillRect(0, 0, s, s);
+    g.strokeStyle = '#b8932c'; g.lineWidth = 1;
+    for (let i = 0; i < 40; i++) { g.beginPath(); const x = Math.random() * s, y = Math.random() * s; g.moveTo(x, y); g.lineTo(x + Math.random() * 14 - 7, y + 3); g.stroke(); }
+    g.fillStyle = '#8a6a1c'; g.fillRect(0, 18, s, 3); g.fillRect(0, 44, s, 3);
+  }),
   grass: () => make('grass', 128, (g, s) => {
     g.fillStyle = '#5fae4a'; g.fillRect(0, 0, s, s);
     speckle(g, s, 500, ['#57a443', '#68b853', '#4f9a3c', '#73c25d'], 2, 5);

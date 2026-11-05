@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, updatePopups, updateToast, toast } from './core.js';
-import { initAudio, toggleMute } from './audio.js';
+import { initAudio, toggleMute, setListener } from './audio.js';
+import { updateGrabFx } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
@@ -128,7 +129,8 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (!playing) { if (e.code === 'Enter' || e.code === 'Space') start(); return; }
   keys.add(e.code); taps.add(e.code);
-  if (e.code === 'Tab' || e.code === 'KeyB') { if (UI.menuOpen) closeMenu(); else openMenu(); return; }
+  const typing = e.target && e.target.tagName === 'INPUT';
+  if (e.code === 'Tab' || (e.code === 'KeyB' && !typing)) { if (UI.menuOpen) closeMenu(); else openMenu(); return; }
   if (e.code === 'Escape' && UI.menuOpen) { closeMenu(); return; }
   if (UI.menuOpen) return;
   if (/^Digit[0-9]$/.test(e.code)) { const n = +e.code.slice(5); selectSlot(n === 0 ? 9 : n - 1); }
@@ -167,6 +169,7 @@ G.player.setToolColor(currentTool().color);
 
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
+const _right = new THREE.Vector3();
 function frame() {
   requestAnimationFrame(frame);
   const rdt = Math.min(clock.getDelta(), 0.05);
@@ -210,6 +213,8 @@ function frame() {
   updatePopups(rdt);
   updateToast(rdt);
   updateHud(rdt);
+  updateGrabFx(dt);
+  setListener(camera.position, _right.set(1, 0, 0).applyQuaternion(camera.quaternion));
 
   // shadows follow the player
   const pp = G.player.body.position;
