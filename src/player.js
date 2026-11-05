@@ -70,10 +70,13 @@ export class Player {
     const s = G.spawn || SPAWN;
     this.body.position.set(s.x, s.y, s.z);
     this.body.velocity.setZero();
+    this.body.interpolatedPosition.copy(this.body.position);
+    this.body.previousPosition.copy(this.body.position);
+    this.camY = undefined;
     this.stun = 0;
   }
 
-  setToolColor(c) { this.toolMesh.material.color.set(c); this.toolMesh.material.emissive.set(c).multiplyScalar(0.3); this.tip.material.color.set(c).lerp(new THREE.Color(0xffffff), 0.5); this.kick = 0.4; }
+  setToolColor(c) { this.toolMesh.material.color.set(c); this.toolMesh.material.emissive.set(c).multiplyScalar(0.3); this.tip.material.color.set(c).lerp(new THREE.Color(0xffffff), 0.5); }
 
   update(dt, input) {
     const b = this.body;
@@ -85,7 +88,7 @@ export class Player {
     const p = b.position;
     // ground check
     const hit = raycast(new THREE.Vector3(p.x, p.y - 0.5, p.z), new THREE.Vector3(p.x, p.y - 1.08, p.z));
-    // standing on a moving object (like a flying pallet)? ride along with it
+    // standing on a moving object? ride along with it
     const plat = hit && hit.body.type === CANNON.Body.DYNAMIC ? hit.body : null;
     this.platform = plat;
     const pv = plat ? plat.velocity : { x: 0, y: 0, z: 0 };
@@ -123,14 +126,20 @@ export class Player {
       b.velocity.y += (G.waterY + 0.1 - p.y) * 12 * dt;
       b.velocity.y *= 1 - 1.5 * dt;
       if (input.jumpHeld) b.velocity.y = Math.max(b.velocity.y, 5);
-    } else if (input.jump) {
-      if (this.grounded) { b.velocity.y = pv.y + 8.5; sfx.jump?.(); }
+    } else if (input.jump || (this.jumpBuf > 0 && this.grounded)) {
+      // forgiving jumps: works a moment after walking off a ledge (coyote time)
+      // and if you press jump just before landing (jump buffer)
+      if (this.grounded || this.coyote > 0) { b.velocity.y = pv.y + 8.5; sfx.jump(); this.coyote = 0; this.jumpBuf = 0; }
+      else if (!input.jump) { /* buffered, wait for ground */ }
       else if (this.airJumps > 0) {
         this.airJumps--; b.velocity.y = 8;
-        FX.smoke(this.feet(), 4, 0xffffff, 0.35); sfx.jump?.();
+        FX.smoke(this.feet(), 4, 0xffffff, 0.35); sfx.jump();
       }
     }
-    if (!this.wasGrounded && this.grounded && this.lastVy < -12) FX.smoke(this.feet(), 5, 0xd9cfb8, 0.5);
+    if (input.jump && !this.grounded && this.coyote <= 0) this.jumpBuf = 0.15;
+    this.jumpBuf = Math.max(0, (this.jumpBuf || 0) - dt);
+    this.coyote = this.grounded ? 0.12 : Math.max(0, (this.coyote || 0) - dt);
+    if (!this.wasGrounded && this.grounded && this.lastVy < -6) { sfx.land(-this.lastVy); if (this.lastVy < -12) FX.smoke(this.feet(), 5, 0xd9cfb8, 0.5); }
     this.wasGrounded = this.grounded;
     this.lastVy = b.velocity.y;
     if (p.y < (G.killY ?? -30)) this.respawn();
@@ -138,7 +147,13 @@ export class Player {
     // camera
     const cp = Math.cos(this.pitch);
     this.fwd.set(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
-    const pivot = new THREE.Vector3(p.x, p.y + 0.65, p.z);
+    // camera follows the physics-interpolated position (no stutter at high refresh rates)
+    // with light vertical smoothing so contact jitter can never bob the view
+    const ip = b.interpolatedPosition;
+    const ty = ip.y + 0.65;
+    if (this.camY === undefined || Math.abs(ty - this.camY) > 1.5) this.camY = ty;
+    else this.camY += (ty - this.camY) * Math.min(1, dt * 22);
+    const pivot = new THREE.Vector3(ip.x, this.camY, ip.z);
     let cam;
     if (this.camMode === 1) {
       cam = pivot.clone().add(new THREE.Vector3(0, 0.15, 0));
@@ -154,8 +169,9 @@ export class Player {
     }
     G.camera.position.copy(cam);
     G.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
-    const targetFov = (input.sprint && mv.lengthSq() > 0 ? 80 : 72) + (this.flying ? 6 : 0);
-    G.camera.fov += (targetFov - G.camera.fov) * Math.min(1, 6 * dt);
+    G.fovPunch = Math.max(0, (G.fovPunch || 0) - dt * 30);
+    const targetFov = (input.sprint && mv.lengthSq() > 0 ? 78 : 72) + (this.flying ? 6 : 0) + G.fovPunch;
+    G.camera.fov += (targetFov - G.camera.fov) * Math.min(1, 10 * dt);
     G.camera.updateProjectionMatrix();
     this.camPos.copy(cam);
     G.aim.origin.copy(cam);
@@ -176,11 +192,10 @@ export class Player {
       const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), G.time * 10);
       this.meshes.torso.quaternion.multiply(q);
     }
-    // viewmodel: bob while walking, swing for melee, recoil kick
-    this.kick = Math.max(0, (this.kick || 0) - dt * 3);
-    const bob = this.grounded ? this.moveAmt : 0;
-    this.view.position.set(0.19 + Math.sin(this.phase) * 0.01 * bob, -0.15 + Math.abs(Math.cos(this.phase)) * 0.01 * bob - this.kick * 0.05, -0.36 + this.kick * 0.04);
-    this.view.rotation.set(this.swing > 0 ? -Math.sin(this.swing * Math.PI) * 1.2 : this.kick * 0.4, this.swing > 0 ? Math.sin(this.swing * Math.PI) * 0.8 : 0, 0);
+    // viewmodel: stays still (no bobbing). Only a small straight-back recoil and the bat swing.
+    this.kick = Math.max(0, (this.kick || 0) - dt * 4);
+    this.view.position.set(0.19, -0.15, -0.36 + this.kick * 0.04);
+    this.view.rotation.set(this.swing > 0 ? -Math.sin(this.swing * Math.PI) * 1.2 : 0, this.swing > 0 ? Math.sin(this.swing * Math.PI) * 0.8 : 0, 0);
     // hand position used for beams / lines = the tool tip
     G.camera.updateMatrixWorld();
     this.tip.getWorldPosition(G.aim.hand);

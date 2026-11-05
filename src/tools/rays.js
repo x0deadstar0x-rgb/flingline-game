@@ -18,7 +18,7 @@ function rayTool(id, name, icon, color, hint, cd, onHit) {
       const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 120);
       FX.beam(G.aim.hand, end, color, 0.07, 0.2);
       FX.beam(G.aim.hand, end, 0xffffff, 0.025, 0.2);
-      sfx.ray?.(color);
+      sfx.ray(color);
       if (h) { FX.sparks(h.point, h.normal, color, 10, 4); onHit(h); }
     },
     update(dt) { cool(this, dt); },
@@ -41,7 +41,7 @@ const magnet = {
         FX.particle({ pos: q, vel: p.clone().sub(q).multiplyScalar(3), color: 0xff6b6b, size: 0.08, life: 0.3, glow: true, add: true, gravity: 0, drag: 0 });
       }
       for (const d of dummiesNear(p, 12)) if (d.state === 'standing') d.knock(null);
-      sfx.hum?.();
+      sfx.hum();
     }
   },
   unequip() { this.active = false; },
@@ -101,12 +101,12 @@ export const rayTools = [
   magnet,
   rayTool('freeze', 'Freeze Ray', '❄️', 0x7fe8ff, 'Click: freeze in place (hit again to thaw). Frozen things shatter easily', 0.2, (h) => {
     const d = dummyOf(h.body);
-    if (d) { if (d.frozen) d.unfreeze(); else d.freeze(12); sfx.freeze?.(); return; }
+    if (d) { if (d.frozen) d.unfreeze(); else d.freeze(12); sfx.freeze(); return; }
     const e = h.body.ent;
     if (!e) return;
     if (e.frozen) unfreeze(e); else freeze(e, 12);
     if (e.burn > 0) { e.burn = 0; G.burning--; }
-    sfx.freeze?.();
+    sfx.freeze();
   }),
   rayTool('antigrav', 'Anti-Gravity Ray', '🪐', 0xc77dff, 'Click: make it float away for 10s', 0.2, (h) => {
     const d = dummyOf(h.body);
@@ -121,13 +121,13 @@ export const rayTools = [
   }),
   rayTool('grow', 'Grow Ray', '🔼', 0x7cff5a, 'Click: make things BIGGER (heavier, too)', 0.25, (h) => {
     const d = dummyOf(h.body);
-    if (d) { d.rescale(1.35); sfx.grow?.(); return; }
-    if (h.body.ent && scaleEnt(h.body.ent, 1.4)) sfx.grow?.(); else toast('Max size!');
+    if (d) { d.rescale(1.35); sfx.grow(); return; }
+    if (h.body.ent && scaleEnt(h.body.ent, 1.4)) sfx.grow(); else toast('Max size!');
   }),
   rayTool('shrink', 'Shrink Ray', '🔽', 0xff6bd6, 'Click: make things tiny', 0.25, (h) => {
     const d = dummyOf(h.body);
-    if (d) { d.rescale(1 / 1.35); sfx.shrink?.(); return; }
-    if (h.body.ent && scaleEnt(h.body.ent, 1 / 1.4)) sfx.shrink?.(); else toast('Min size!');
+    if (d) { d.rescale(1 / 1.35); sfx.shrink(); return; }
+    if (h.body.ent && scaleEnt(h.body.ent, 1 / 1.4)) sfx.shrink(); else toast('Min size!');
   }),
   rayTool('paint', 'Paint Gun', '🎨', 0xffbe0b, 'Click: random paint job', 0.12, (h) => {
     const d = dummyOf(h.body);
@@ -144,10 +144,13 @@ export const rayTools = [
       const to = h.point.clone().addScaledVector(h.normal, 1.0).add(new THREE.Vector3(0, 0.9, 0));
       FX.confetti(from, 20, 4);
       G.player.body.position.set(to.x, to.y, to.z);
+      G.player.body.previousPosition.set(to.x, to.y, to.z);
+      G.player.body.interpolatedPosition.set(to.x, to.y, to.z);
+      G.player.camY = undefined;
       G.player.body.velocity.set(0, 0, 0);
       FX.confetti(to, 20, 4);
       FX.beam(from, to, 0x3bd1ff, 0.1, 0.3);
-      sfx.teleport?.();
+      sfx.teleport();
     },
     update(dt) { cool(this, dt); },
   },

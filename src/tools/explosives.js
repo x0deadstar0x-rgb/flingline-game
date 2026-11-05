@@ -34,7 +34,7 @@ function makeBlackHole(pos) {
   g.add(core, ring, ring2);
   g.position.copy(pos);
   G.scene.add(g);
-  sfx.blackhole?.();
+  sfx.blackhole();
   G.blackholes.push({ pos: pos.clone().add(new THREE.Vector3(0, 1.5, 0)), t: 0, life: 3.8, mesh: g, ring, ring2 });
 }
 const _f = new CANNON.Vec3();
@@ -142,7 +142,7 @@ export const boomTools = [
           else {
             e.body.type = CANNON.Body.STATIC; e.body.mass = 0; e.body.updateMassProperties(); e.body.velocity.setZero();
           }
-          e.fuse = 2; sfx.beep?.();
+          e.fuse = 2; sfx.beep();
         });
       });
       e.update = function () { if (!this.stuck && G.time - this.born > 6 && this.fuse == null) this.fuse = 0.1; };
@@ -190,7 +190,7 @@ export const boomTools = [
       const start = target.clone().add(new THREE.Vector3(rand(-30, 30), 80, rand(-30, 30)));
       const mesh = mkMesh(meteorGeo, 0x5a3a2a);
       mesh.material.emissive = new THREE.Color(0xff3a00); mesh.material.emissiveIntensity = 0.6;
-      sfx.whistle?.();
+      sfx.whistle();
       projectile({
         pos: start, vel: target.clone().sub(start).divideScalar(1.3), life: 1.3, mesh, collide: false,
         trail: (p) => { for (let i = 0; i < 2; i++) FX.particle({ pos: p.clone().add(new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1))), vel: new THREE.Vector3(), color: [0xff8a1c, 0xffd04a, 0x555555][i + (Math.random() < 0.4 ? 1 : 0)], size: rand(0.6, 1.1), life: 0.6, glow: i === 0, add: true, gravity: 0, grow: 1, shrink: false }); mesh.rotation.x += 0.2; },
@@ -208,7 +208,7 @@ export const boomTools = [
       if (this.cd > 0) return; this.cd = 3.5;
       const h = aimPoint(300, 40);
       const dir = new THREE.Vector3(G.aim.dir.x, 0, G.aim.dir.z).normalize();
-      sfx.plane?.();
+      sfx.plane();
       popup('INCOMING!', h.point.clone().add(new THREE.Vector3(0, 3, 0)), '#ff5555', 24);
       for (let i = 0; i < 8; i++) {
         const tp = h.point.clone().addScaledVector(dir, (i - 2) * 4);
@@ -232,7 +232,7 @@ export const boomTools = [
       const target = h.point.clone();
       const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0xe2c21d, flatShading: true }));
       popup('☢ NUKE INCOMING ☢', target.clone().add(new THREE.Vector3(0, 4, 0)), '#ffe14a', 30);
-      sfx.whistle?.(2.4);
+      sfx.whistle(2.4);
       projectile({
         pos: target.clone().add(new THREE.Vector3(0, 90, 0)), vel: new THREE.Vector3(0, -37, 0), life: 2.4, collide: false, mesh,
         end: () => {

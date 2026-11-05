@@ -30,7 +30,7 @@ export const gunTools = [
     id: 'shotgun', name: 'Shotgun', icon: '💥', color: 0xff8a1c, hint: 'Click: 9 pellets of chaos',
     down() {
       if (this.cd > 0) return; this.cd = 0.75;
-      sfx.shotgun ? sfx.shotgun() : sfx.explosion(0.3);
+      sfx.shotgun();
       for (let i = 0; i < 9; i++) shoot(spreadDir(G.aim.dir, 0.07), 60, 10, 4.5, 0xffb347, 0.03, 0.06);
       G.player.fling(G.aim.dir.clone().multiplyScalar(-2.5));
       G.shake = Math.max(G.shake, 0.3);
@@ -42,9 +42,9 @@ export const gunTools = [
     spin: 0,
     held(dt) {
       this.spin = Math.min(1, this.spin + dt * 2.5);
-      if (this.spin < 0.6) { sfx.whir?.(this.spin); return; }
+      if (this.spin < 0.6) { sfx.whir(this.spin); return; }
       this.acc = (this.acc || 0) + dt;
-      while (this.acc > 0.045) { this.acc -= 0.045; sfx.shoot(); shoot(spreadDir(G.aim.dir, 0.03), 150, 7, 2.2, 0xfff1a8, 0.03, 0.05); }
+      while (this.acc > 0.045) { this.acc -= 0.045; sfx.minigun(); shoot(spreadDir(G.aim.dir, 0.03), 150, 7, 2.2, 0xfff1a8, 0.03, 0.05); }
       G.shake = Math.max(G.shake, 0.08);
     },
     update(dt, input) { if (!input.mouseDown) this.spin = Math.max(0, this.spin - dt * 2); },
@@ -53,7 +53,7 @@ export const gunTools = [
     id: 'sniper', name: 'Railgun', icon: '🎯', color: 0x9ad9ff, hint: 'Click: piercing shot through up to 6 things',
     down() {
       if (this.cd > 0) return; this.cd = 1.0;
-      sfx.rail ? sfx.rail() : sfx.shoot();
+      sfx.rail();
       const dir = G.aim.dir.clone();
       let s = G.aim.start.clone();
       let end = s.clone().addScaledVector(dir, 300);
@@ -76,7 +76,7 @@ export const gunTools = [
     id: 'lightning', name: 'Lightning Gun', icon: '⚡', color: 0xa8d8ff, hint: 'Click: lightning that chains between things',
     down() {
       if (this.cd > 0) return; this.cd = 0.55;
-      sfx.zap ? sfx.zap() : sfx.shoot();
+      sfx.zap();
       const h = aimHit(80);
       const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 80);
       FX.lightning(G.aim.hand, end);
@@ -92,7 +92,7 @@ export const gunTools = [
         const p = tv(b.position);
         if (from) FX.lightning(from, p);
         FX.sparks(p, new THREE.Vector3(0, 1, 0), 0xbfe3ff, 10, 6);
-        if (d) { d.knock(new THREE.Vector3(rand(-3, 3), 7, rand(-3, 3))); sfx.oof(); }
+        if (d) { d.knock(new THREE.Vector3(rand(-3, 3), 7, rand(-3, 3))); }
         else if (b.type === CANNON.Body.DYNAMIC) {
           b.velocity.y += 6 * massFactor(b.mass); b.velocity.x += rand(-2, 2); b.velocity.z += rand(-2, 2);
           b.angularVelocity.set(rand(-8, 8), rand(-8, 8), rand(-8, 8)); b.wakeUp();
@@ -125,7 +125,7 @@ export const gunTools = [
         const v = spreadDir(dir, 0.12).multiplyScalar(rand(12, 16)).add(G.player.body.velocity);
         FX.particle({ pos: hand.clone().addScaledVector(dir, 0.9), vel: v, color: [0xff9a2a, 0xff6a1a, 0xff3d14][i], size: rand(0.1, 0.2), life: rand(0.35, 0.55), glow: true, add: true, opacity: 0.55, gravity: -3, drag: 2.2, grow: 2.2, shrink: false });
       }
-      sfx.flame?.();
+      sfx.flame();
       this.tick = (this.tick || 0) - dt;
       if (this.tick > 0) return;
       this.tick = 0.12;
@@ -178,8 +178,8 @@ export const gunTools = [
         if (o.b.ent) damage(o.b.ent, 40, fwd);
         hitAny = true;
       }
-      if (hitAny) { sfx.whack ? sfx.whack() : sfx.thunk(15); G.shake = Math.max(G.shake, 0.35); FX.sparks(c, fwd.clone().negate(), 0xffffff, 10, 6); }
-      else sfx.swoosh?.();
+      if (hitAny) { sfx.whack(); G.shake = Math.max(G.shake, 0.35); FX.sparks(c, fwd.clone().negate(), 0xffffff, 10, 6); }
+      else sfx.swoosh();
     },
     update(dt) { cool(this, dt); },
   },

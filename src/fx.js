@@ -80,8 +80,9 @@ export function updateFx(dt) {
     p.vel.y -= p.grav * dt;
     p.vel.multiplyScalar(Math.max(0, 1 - p.drag * dt));
     p.m.position.addScaledVector(p.vel, dt);
-    if (p.floor && G.particleFloor && p.m.position.y < 0.05 && (G.mapId === 'flat' || (Math.abs(p.m.position.x) < 70 && Math.abs(p.m.position.z) < 70))) {
-      p.m.position.y = 0.05; p.vel.y *= -0.3; p.vel.x *= 0.6; p.vel.z *= 0.6;
+    const fy = p.floor && G.groundAt ? G.groundAt(p.m.position.x, p.m.position.z) + 0.05 : -1e9;
+    if (p.m.position.y < fy) {
+      p.m.position.y = fy; p.vel.y *= -0.3; p.vel.x *= 0.6; p.vel.z *= 0.6;
     }
     p.m.rotation.x += p.spin * dt; p.m.rotation.y += p.spin * dt * 0.7;
     let s = p.size * (1 + p.grow * k);
