@@ -625,8 +625,51 @@ export function loadMap(id) {
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
   m.build();
   if (m.id !== 'sky') makeClouds(18, 70, 300);
+  applyTime(G.settings ? G.settings.time : 'day');
   G.spawn = new THREE.Vector3(...m.spawn);
   if (G.player) G.player.respawn();
+}
+
+// ------------------------------------------------------------- time of day
+const TIMES = {
+  day:    { sun: 2.2, sunCol: 0xfff1d6, hemi: 1.1, hemiSky: 0xcfe8ff, hemiGround: 0x6b5a3a, tint: null, k: 0, exposure: 1.05, stars: false, sunPos: [40, 70, 25] },
+  sunset: { sun: 1.5, sunCol: 0xffa060, hemi: 0.75, hemiSky: 0xffc89a, hemiGround: 0x5a3f2a, tint: [0x6a4fa0, 0xff9a5a], k: 0.65, exposure: 1.1, stars: false, sunPos: [80, 18, 10] },
+  night:  { sun: 0.35, sunCol: 0x9fb4ff, hemi: 0.3, hemiSky: 0x5a6fa8, hemiGround: 0x1a1a24, tint: [0x05070f, 0x1a2340], k: 0.92, exposure: 1.25, stars: true, sunPos: [-30, 60, -40] },
+};
+let stars = null;
+const lampGlow = new Set();
+export function applyTime(mode) {
+  const t = TIMES[mode] || TIMES.day;
+  G.timeOfDay = mode;
+  if (G.sun) { G.sun.intensity = t.sun; G.sun.color.set(t.sunCol); G.sunOffset = t.sunPos; }
+  if (G.hemi) { G.hemi.intensity = t.hemi; G.hemi.color.set(t.hemiSky); G.hemi.groundColor.set(t.hemiGround); }
+  if (G.renderer) G.renderer.toneMappingExposure = t.exposure;
+  const m = G.map;
+  if (m && sky) {
+    const top = new THREE.Color(m.sky[0]), bot = new THREE.Color(m.sky[1]);
+    if (t.tint) { top.lerp(new THREE.Color(t.tint[0]), t.k); bot.lerp(new THREE.Color(t.tint[1]), t.k); }
+    sky.material.uniforms.top.value.copy(top);
+    sky.material.uniforms.bottom.value.copy(bot);
+    if (G.scene.fog) G.scene.fog.color.copy(bot);
+  }
+  if (!stars) {
+    const n = 900, pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, y = Math.random() * 0.9 + 0.08, r = Math.sqrt(1 - y * y);
+      pos[i * 3] = Math.cos(a) * r * 700; pos[i * 3 + 1] = y * 700; pos[i * 3 + 2] = Math.sin(a) * r * 700;
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false }));
+    stars.frustumCulled = false;
+    G.scene.add(stars);
+  }
+  stars.visible = t.stars;
+  // street lamps, windows and pads glow at night
+  const glow = mode === 'night' ? 1.4 : mode === 'sunset' ? 0.4 : 0;
+  G.scene.traverse((o) => {
+    if (!o.isMesh || !o.material || !o.material.color) return;
+    if (o.material.color.getHex() === 0xfff3b0) { o.material.emissive = o.material.emissive || new THREE.Color(); o.material.emissive.set(0xfff3b0); o.material.emissiveIntensity = glow; }
+  });
 }
 
 const _padT = new WeakMap();
@@ -642,6 +685,7 @@ export function updateMap(dt) {
   }
   for (const c of clouds) { c.position.x += c.userData.v * dt; if (c.position.x > 320) c.position.x = -320; }
   if (sky && G.camera) sky.position.copy(G.camera.position);
+  if (stars && G.camera) stars.position.copy(G.camera.position);
   for (const pd of G.pads) {
     const check = (b) => {
       const dx = b.position.x - pd.pos.x, dz = b.position.z - pd.pos.z, dy = b.position.y - pd.pos.y;
