@@ -92,7 +92,7 @@ export const gunTools = [
         const p = tv(b.position);
         if (from) FX.lightning(from, p);
         FX.sparks(p, new THREE.Vector3(0, 1, 0), 0xbfe3ff, 10, 6);
-        if (d) { d.knock(new THREE.Vector3(rand(-3, 3), 7, rand(-3, 3))); }
+        if (d) { d.hurt(30, null, new THREE.Vector3(rand(-3, 3), 7, rand(-3, 3))); }
         else if (b.type === CANNON.Body.DYNAMIC) {
           b.velocity.y += 6 * massFactor(b.mass); b.velocity.x += rand(-2, 2); b.velocity.z += rand(-2, 2);
           b.angularVelocity.set(rand(-8, 8), rand(-8, 8), rand(-8, 8)); b.wakeUp();
@@ -164,7 +164,7 @@ export const gunTools = [
       let hitAny = false;
       for (const d of dummiesNear(c, 2.4)) {
         const v = fwd.clone().multiplyScalar(26).add(new THREE.Vector3(0, 10, 0));
-        if (d.state === 'standing') d.knock(v); else d.knock(v);
+        d.hurt(25, fwd, v);
         d.markFling();
         popup('HOME RUN!', d.center().add(new THREE.Vector3(0, 1.5, 0)), '#ffcf3a', 24);
         hitAny = true;

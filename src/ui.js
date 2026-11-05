@@ -140,6 +140,7 @@ function renderSettings(body) {
   row('Field of view', 'How wide you can see.', slider('fov', 60, 100, 1, (v) => `${v}°`));
   row('Volume', 'M mutes everything.', slider('volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
   row('Graphics', 'Low turns off shadows and lowers resolution (much faster). Also L.', choice('quality', [['high', 'High'], ['low', 'Low']]));
+  row('Theme', 'Light or dark menus.', choice('theme', [['dark', 'Dark'], ['light', 'Light']]));
   row('Time of day', 'Night makes explosions and lamps glow.', choice('time', [['day', 'Day'], ['sunset', 'Sunset'], ['night', 'Night']]));
   const reset = document.createElement('button');
   reset.className = 'sreset';

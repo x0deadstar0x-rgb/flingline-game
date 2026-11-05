@@ -4,7 +4,7 @@ import * as CANNON from 'cannon-es';
 import { G, updatePopups, updateToast, toast } from './core.js';
 import { initAudio, toggleMute, setListener, setVolume } from './audio.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
-import { updateGrabFx } from './tools/grab.js';
+import { updateGrabFx, rotateHeld } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
@@ -173,6 +173,7 @@ onSetting('quality', (q) => {
 });
 onSetting('volume', (v) => setVolume(v));
 onSetting('time', (t) => applyTime(t));
+onSetting('theme', (t) => document.body.classList.toggle('light', t === 'light'));
 applyAll();
 
 // undo: removes the last thing you spawned (U)
@@ -200,6 +201,8 @@ function frame() {
 
   const active = playing && !UI.menuOpen;
   const k = (c) => active && keys.has(c);
+  // holding R with the Fling Line: the mouse turns the held object instead of the camera
+  if (active && keys.has('KeyR') && G.grab && currentTool().id === 'fling' && rotateHeld(input.lookX, input.lookY)) { input.lookX = 0; input.lookY = 0; }
   const pin = {
     f: k('KeyW'), b: k('KeyS'), l: k('KeyA'), r: k('KeyD'),
     sprint: k('ShiftLeft') || k('ShiftRight'), sprintDown: k('ShiftLeft') || k('ShiftRight'),

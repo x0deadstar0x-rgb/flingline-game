@@ -1,7 +1,7 @@
 // Player settings (saved in the browser) + applying them.
 import { G } from './core.js';
 
-export const DEFAULTS = { sens: 2.2, volume: 0.8, fov: 72, quality: 'high', invertY: false, time: 'day' };
+export const DEFAULTS = { sens: 2.2, volume: 0.8, fov: 72, quality: 'high', invertY: false, time: 'day', theme: 'dark' };
 export const S = { ...DEFAULTS };
 
 try {

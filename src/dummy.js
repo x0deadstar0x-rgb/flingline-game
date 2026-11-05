@@ -31,6 +31,12 @@ const P = {
   legR:  { t: 'box', size: [0.22, 0.8, 0.22], pos: [0.14, 0.4, 0], m: 0.155 },
 };
 const PARTS = Object.keys(P);
+const IMPACT_SAFE = 13;  // impacts slower than this (m/s) don't hurt
+const KO_HIT = 38;       // one hit this big knocks a dummy out
+
+// small health bar shown above a dummy for a few seconds after it gets hurt
+const barGeo = new THREE.PlaneGeometry(1, 0.09);
+const barBgMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55, depthTest: false, fog: false });
 
 const geos = {};
 function partGeo(name, s) {
@@ -75,12 +81,12 @@ const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
 // Pose a humanoid (meshes in world space) standing at origin with yaw and animation params.
 export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
   const qy = _q2.setFromAxisAngle(Y, yaw);
-  const set = (name, lx, ly, lz, rx, pivotY) => {
+  const set = (name, lx, ly, lz, rx, pivotY, rz = 0) => {
     const m = meshes[name];
     if (!m) return;
     const half = name.startsWith('leg') ? 0.4 : 0.33;
     // limb rotates around its top pivot
-    _q.setFromAxisAngle(X, rx);
+    if (rz) _q.setFromEuler(_e.set(rx, 0, rz, 'XYZ')); else _q.setFromAxisAngle(X, rx);
     _v.set(0, -half * s, 0).applyQuaternion(_q);
     _v.add(new THREE.Vector3(lx * s, pivotY * s, lz * s));
     _v.applyQuaternion(qy).add(origin);
@@ -96,15 +102,24 @@ export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
   if (opts.zombie) { al = ar = -Math.PI / 2 + Math.sin(G.time * 3) * 0.1; }
   if (opts.aim !== undefined) ar = -Math.PI / 2 - opts.aim;
   if (opts.swing) ar = -Math.PI / 2 - 1.2 + opts.swing * 2.5;
+  let rzR = 0;
+  if (opts.wave) { ar = 0; rzR = 2.55 + Math.sin(G.time * 11) * 0.35; }
+  if (opts.talk) {
+    const t = G.time * 3 + (opts.seed || 0);
+    al = -0.35 - Math.max(0, Math.sin(t)) * 0.6;
+    ar = -0.35 - Math.max(0, Math.sin(t * 1.3 + 2)) * 0.6;
+  }
   set('armL', -0.38, 0, 0, al, 1.5);
-  set('armR', 0.38, 0, 0, ar, 1.5);
+  set('armR', 0.38, 0, 0, ar, 1.5, rzR);
   const t = meshes.torso;
   t.position.set(0, 1.17 * s + bob, 0).applyQuaternion(qy).add(origin);
   t.quaternion.copy(qy);
   const h = meshes.head;
   h.position.set(0, 1.8 * s + bob, 0).applyQuaternion(qy).add(origin);
   h.quaternion.copy(qy);
+  if (opts.headYaw) h.quaternion.multiply(_q.setFromAxisAngle(Y, opts.headYaw));
   if (opts.pitch !== undefined) h.quaternion.multiply(_q.setFromAxisAngle(X, -opts.pitch * 0.5));
+  if (opts.nod) h.quaternion.multiply(_q.setFromAxisAngle(X, opts.nod));
 }
 
 let dummyId = 1;
@@ -126,7 +141,13 @@ export class Dummy {
     this.spawned = !!opts.spawned;
     this.yaw = opts.yaw ?? rand(0, Math.PI * 2);
     this.phase = 0; this.moveAmt = 0;
-    this.ai = { t: 0, dir: new THREE.Vector3(), idle: false, shove: 0, jump: rand(1, 3) };
+    this.ai = { mode: 'idle', t: rand(0.5, 3), dir: new THREE.Vector3(), goal: null, partner: null, shove: 0, jump: rand(1, 3), safeT: 0, safe: new THREE.Vector3(), lastWave: -99, look: 0 };
+    this.maxHp = Math.round(100 * (this.cfg.metal ? 2.5 : 1) * Math.sqrt(this.s));
+    this.hp = this.maxHp;
+    this.ko = 0;          // knocked out: stays down this many seconds
+    this.deadT = 0;       // >0 while dead (counts up)
+    this.lastHurt = -99;
+    this.home = pos.clone();
     this.state = null;
     this.frozen = 0;
     this.downTime = 0;
@@ -207,6 +228,13 @@ export class Dummy {
       b.addEventListener('collide', (e) => {
         const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
         if (v > 7) { sfx.oof(b.position, this.pitch); if (v > 14) afterStep(() => { if (this.parts) FX.debris(tv(b.position), 0xffffff, 3, 0.08, 3); }); }
+        // hard landings hurt (head and torso count most)
+        if (v > IMPACT_SAFE && G.time - this.impactT > 0.12) {
+          this.impactT = G.time;
+          const k = n === 'head' ? 1.5 : n === 'torso' ? 1 : 0.5;
+          const dmg = (v - IMPACT_SAFE) * 2.2 * k * (this.cfg.mat === 'bouncyflesh' ? 0.4 : 1);
+          afterStep(() => this.damageHp(dmg));
+        }
       });
       G.world.addBody(b);
       G.ents.add(ent);
@@ -227,6 +255,7 @@ export class Dummy {
     for (const k of c) G.world.addConstraint(k);
     this.constraints = c;
     this.state = 'ragdoll';
+    this.impactT = G.time;
     this.downTime = 0; this.still = 0;
     this.flingStart = this.center(); this.maxDist = 0;
     sfx.oof(this.center(), this.pitch);
@@ -235,9 +264,45 @@ export class Dummy {
   // called when the fling line throws this dummy
   markFling() { this.flingStart = this.center(); this.maxDist = 0; this.thrown = true; }
 
-  hurt(dmg, dir) {
-    if (this.state === 'standing') this.knock(dir ? dir.clone().multiplyScalar(Math.min(dmg * 0.15, 12)) : null);
-    else if (dmg > 8) sfx.oof(this.center(), this.pitch);
+  // dmg = health damage; push = optional knock velocity (defaults from dmg + dir)
+  hurt(dmg, dir, push) {
+    if (this.state === 'standing') this.knock(push || (dir ? dir.clone().multiplyScalar(Math.min(dmg * 0.15, 12)) : null));
+    else { if (push) this.knock(push); if (dmg > 8) sfx.oof(this.center(), this.pitch); }
+    this.damageHp(dmg);
+  }
+
+  damageHp(dmg) {
+    if (this.dead || this.deadT > 0 || !(dmg > 0)) return;
+    this.hp -= dmg;
+    this.lastHurt = G.time;
+    if (this.hp <= 0) { this.die(); return; }
+    // a big hit (or low health) knocks them out for a while
+    if (dmg >= KO_HIT || this.hp < this.maxHp * 0.25) {
+      if (this.state === 'standing') this.knock(null);
+      if (this.ko <= 0) popup('KO!', this.center().add(new THREE.Vector3(0, 1.2, 0)), '#ffe14a', 20);
+      this.ko = Math.max(this.ko, rand(4, 7));
+    }
+  }
+
+  die() {
+    this.hp = 0;
+    this.deadT = 0.001;
+    this.ko = 0;
+    if (this.state === 'standing') this.knock(null);
+    popup('✖ DOWN', this.center().add(new THREE.Vector3(0, 1.3, 0)), '#ff5050', 22);
+    G.stats.kos = (G.stats.kos || 0) + 1;
+    // grey out
+    for (const n of PARTS) {
+      const m = this.meshes[n];
+      if (!m.userData.alive) m.userData.alive = m.material;
+      m.material = m.material.clone();
+      m.material.color.lerp(new THREE.Color(0x777777), 0.6);
+    }
+  }
+
+  revive() {
+    for (const n of PARTS) { const m = this.meshes[n]; if (m.userData.alive) { m.material = m.userData.alive; m.userData.alive = null; } }
+    this.hp = this.maxHp; this.deadT = 0; this.ko = 0; this.burn = 0;
   }
 
   freeze(dur) {
@@ -288,6 +353,7 @@ export class Dummy {
     this.clearRagdoll();
     this.makeStanding(feet);
     this.yaw = rand(0, Math.PI * 2);
+    this.ai.mode = 'idle'; this.ai.t = rand(0.5, 2); this.ai.partner = null; this.ai.goal = null;
     sfx.pop(feet);
     FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.3, 0)), 4, 0xd9cfb8, 0.5);
   }
@@ -304,13 +370,19 @@ export class Dummy {
   }
 
   respawn() {
-    // fell out of the world: bring back on land
+    // fell out of the world (or died): come back where they first appeared
     this.reportFling();
-    const sp = G.spawn || new THREE.Vector3(0, 1, 0);
-    const feet = new THREE.Vector3(sp.x + rand(-8, 8), sp.y + 0.5, sp.z - rand(4, 12));
+    this.revive();
+    const h = this.home;
+    let feet = new THREE.Vector3(h.x + rand(-1.5, 1.5), h.y + 0.5, h.z + rand(-1.5, 1.5));
+    const g = raycast(feet.clone().setY(h.y + 30), feet.clone().setY(h.y - 30), GROUP.STATIC);
+    if (g && g.point.y > G.waterY) feet = g.point.add(new THREE.Vector3(0, 0.1, 0));
+    else { const sp = G.spawn || new THREE.Vector3(0, 1, 0); feet = new THREE.Vector3(sp.x + rand(-8, 8), sp.y + 0.5, sp.z - rand(4, 12)); }
     if (this.state === 'ragdoll') this.clearRagdoll(); else if (this.body) G.world.removeBody(this.body);
     this.body = null;
     this.makeStanding(feet);
+    this.ai.mode = 'idle'; this.ai.t = rand(1, 2);
+    FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.5, 0)), 6, 0xffffff, 0.6);
     popup('...and back!', feet.clone().add(new THREE.Vector3(0, 2.5, 0)), '#aee', 16);
   }
 
@@ -318,6 +390,8 @@ export class Dummy {
     if (this.state === 'ragdoll') this.clearRagdoll();
     else if (this.body) G.world.removeBody(this.body);
     for (const n of PARTS) G.scene.remove(this.meshes[n]);
+    if (this.bar) G.scene.remove(this.bar);
+    if (this.ai.partner) this.ai.partner.endChat();
     G.dummies.delete(this);
     this.dead = true;
   }
@@ -344,9 +418,104 @@ export class Dummy {
       if (c.y < G.waterY + 0.3) { this.burn = 0; FX.smoke(c, 5, 0xdddddd, 0.6); }
       if (Math.random() < 0.6) FX.particle({ pos: c.clone().add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.6, 0.6) * this.s, rand(-0.3, 0.3))), vel: new THREE.Vector3(rand(-0.5, 0.5), rand(2, 4), rand(-0.5, 0.5)), color: Math.random() < 0.5 ? 0xff7a1a : 0xffc04a, size: rand(0.2, 0.35) * this.s, life: rand(0.4, 0.7), glow: true, add: true, gravity: -2, floor: false });
       if (Math.random() < dt * 1.5) sfx.oof(c, this.pitch);
+      this.damageHp(dt * 9);
     }
+    // slowly heal while fine
+    if (this.deadT <= 0 && this.ko <= 0 && G.time - this.lastHurt > 6) this.hp = Math.min(this.maxHp, this.hp + dt * 6);
+    this.updateBar();
     if (this.state === 'standing') this.updateStanding(dt);
     else this.updateRagdoll(dt);
+  }
+
+  updateBar() {
+    const show = G.time - this.lastHurt < 3 && this.deadT <= 0 && !this.dead;
+    if (!show) { if (this.bar) this.bar.visible = false; return; }
+    if (!this.bar) {
+      this.bar = new THREE.Group();
+      const bg = new THREE.Mesh(barGeo, barBgMat);
+      this.barFill = new THREE.Mesh(barGeo, new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false, fog: false }));
+      this.barFill.position.z = 0.001;
+      bg.renderOrder = 20; this.barFill.renderOrder = 21;
+      this.bar.add(bg, this.barFill);
+      G.scene.add(this.bar);
+    }
+    const f = clamp(this.hp / this.maxHp, 0, 1);
+    this.bar.visible = true;
+    this.bar.position.copy(this.state === 'standing' ? this.origin() : this.center()).add(new THREE.Vector3(0, this.state === 'standing' ? 2.35 * this.s : 0.9 * this.s, 0));
+    this.bar.quaternion.copy(G.camera.quaternion);
+    this.bar.scale.setScalar(Math.max(0.7, this.s));
+    this.barFill.scale.x = Math.max(0.001, f);
+    this.barFill.position.x = -(1 - f) / 2;
+    this.barFill.material.color.setHex(f > 0.5 ? 0x4ade80 : f > 0.25 ? 0xfacc15 : 0xef4444);
+  }
+
+  endChat() {
+    const p = this.ai.partner;
+    this.ai.partner = null;
+    if (this.ai.mode === 'chat') { this.ai.mode = 'idle'; this.ai.t = rand(1, 3); }
+    if (p && p.ai.partner === this) p.endChat();
+  }
+
+  // is it OK to walk this way? (solid ground ahead, not a drop, not water, no wall)
+  pathOk(dir, dist) {
+    const b = this.body, s = this.s;
+    const footY = b.position.y - 0.95 * s;
+    const wall = raycast(new THREE.Vector3(b.position.x, b.position.y, b.position.z), new THREE.Vector3(b.position.x + dir.x * 1.1 * s, b.position.y, b.position.z + dir.z * 1.1 * s), GROUP.STATIC | GROUP.DYN);
+    if (wall && wall.body !== b && Math.abs(wall.normal.y) < 0.6) return false;
+    for (const k of [0.6, 1]) {
+      const fx = b.position.x + dir.x * dist * k, fz = b.position.z + dir.z * dist * k;
+      const floor = raycast(new THREE.Vector3(fx, footY + 1.2 * s, fz), new THREE.Vector3(fx, footY - 1.6, fz), GROUP.STATIC | GROUP.DYN);
+      if (!floor) return false;                            // edge / hole
+      if (floor.point.y < G.waterY + 0.15) return false;   // water
+      if (floor.point.y < footY - 1.1) return false;       // too big a drop
+    }
+    return true;
+  }
+
+  // the closest direction to `want` that is safe to walk; null = stay put
+  safeDir(want, speed, dt) {
+    const ai = this.ai;
+    ai.safeT -= dt;
+    if (ai.safeT > 0 && ai.safeWant && ai.safeWant.dot(want) > 0.95) return ai.safeNull ? null : ai.safe;
+    ai.safeT = 0.15;
+    ai.safeWant = want.clone();
+    const dist = clamp(speed * 0.55, 1.3, 3.2) * Math.max(0.8, this.s);
+    const base = Math.atan2(want.x, want.z);
+    for (const off of [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 2.0, -2.0, 2.6, -2.6, Math.PI]) {
+      const a = base + off;
+      const d = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+      if (this.pathOk(d, dist)) { ai.safe.copy(d); ai.safeNull = false; return ai.safe; }
+    }
+    ai.safeNull = true;
+    return null;
+  }
+
+  // a random spot to walk to that has ground (not water) under it
+  pickGoal() {
+    const o = this.origin();
+    const wb = G.walkBound ?? 58;
+    for (let i = 0; i < 8; i++) {
+      const a = rand(0, Math.PI * 2), r = rand(5, 18);
+      const x = clamp(o.x + Math.cos(a) * r, -wb, wb), z = clamp(o.z + Math.sin(a) * r, -wb, wb);
+      const g = raycast(new THREE.Vector3(x, o.y + 6, z), new THREE.Vector3(x, o.y - 6, z), GROUP.STATIC);
+      if (g && g.point.y > G.waterY + 0.2 && g.normal.y > 0.7 && Math.abs(g.point.y - o.y) < 4) return g.point;
+    }
+    return null;
+  }
+
+  // nearest danger to run from (explosions, fire, zombies, burning) or null
+  threat(feet) {
+    if (this.burn > 0) return { pos: feet.clone().add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1))), burning: true };
+    if (G.time - G.lastBoom.time < 4 && G.lastBoom.pos.distanceTo(feet) < 28) return { pos: G.lastBoom.pos };
+    if (G.firePatches) for (const f of G.firePatches) if (f.pos.distanceTo(feet) < f.r + 5) return { pos: f.pos };
+    for (const h of G.blackholes) if (h.mesh && h.mesh.position.distanceTo(feet) < 22) return { pos: h.mesh.position };
+    if (this.cfg.ai !== 'zombie') {
+      for (const d of G.dummies) {
+        if (d === this || d.cfg.ai !== 'zombie' || d.state !== 'standing') continue;
+        if (d.origin().distanceTo(feet) < 8) return { pos: d.origin() };
+      }
+    }
+    return null;
   }
 
   updateStanding(dt) {
@@ -359,10 +528,13 @@ export class Dummy {
     const grounded = !!ground;
     let speed = 0;
     const want = new THREE.Vector3();
-    const panic = (G.time - G.lastBoom.time < 4 && G.lastBoom.pos.distanceTo(feet) < 28) || this.burn > 0;
     const kind = this.cfg.ai;
-    if (kind === 'zombie' && G.player) {
-      const pp = G.player.pos();
+    const pose = { headYaw: 0 };
+    const pp = G.player ? G.player.pos() : null;
+    const threat = kind === 'zombie' ? null : this.threat(feet);
+    let face = null; // point to turn towards while standing still
+
+    if (kind === 'zombie' && pp) {
       want.subVectors(pp, feet).setY(0);
       const d = want.length();
       want.normalize();
@@ -374,45 +546,85 @@ export class Dummy {
         sfx.oof(pp, this.pitch); popup('BONK', pp.clone().add(new THREE.Vector3(0, 2, 0)), '#8f8', 18);
       }
       if (Math.random() < dt * 0.15) sfx.groan(feet);
-    } else {
-      ai.t -= dt;
-      if (ai.t <= 0) {
-        ai.t = rand(2, 5);
-        ai.idle = Math.random() < 0.3;
-        const a = rand(0, Math.PI * 2);
-        ai.dir.set(Math.cos(a), 0, Math.sin(a));
-      }
-      const wb = G.walkBound ?? 58;
-      if (Math.abs(feet.x) > wb || Math.abs(feet.z) > wb) ai.dir.set(-feet.x, 0, -feet.z).normalize();
-      if (this.burn > 0) {
+      pose.zombie = true;
+    } else if (threat) {
+      // run away from danger
+      if (ai.mode === 'chat') this.endChat();
+      ai.mode = 'flee'; ai.t = rand(1.5, 3);
+      if (threat.burning) {
         if (Math.random() < dt * 2) ai.dir.set(rand(-1, 1), 0, rand(-1, 1)).normalize();
         want.copy(ai.dir); speed = 6.5;
-      } else if (panic) {
-        want.subVectors(feet, G.lastBoom.pos).setY(0).normalize();
+      } else {
+        want.subVectors(feet, threat.pos).setY(0);
+        if (want.lengthSq() < 0.01) want.set(rand(-1, 1), 0, rand(-1, 1));
+        want.normalize();
         speed = 5.5;
-      } else if (!ai.idle) { want.copy(ai.dir); speed = this.cfg.speed; }
+      }
+      pose.armsUp = true;
+    } else {
+      ai.t -= dt;
+      const wb = G.walkBound ?? 58;
+      const outside = Math.abs(feet.x) > wb || Math.abs(feet.z) > wb;
+      if (ai.mode === 'flee' && ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
+      if (ai.mode === 'flee') { want.copy(ai.safe.lengthSq() ? ai.safe : ai.dir); speed = 3.5; }
+      else if (ai.mode === 'walk') {
+        if (!ai.goal || outside) ai.goal = outside ? new THREE.Vector3(0, feet.y, 0) : this.pickGoal();
+        if (!ai.goal) { ai.mode = 'idle'; ai.t = rand(1, 3); }
+        else {
+          want.subVectors(ai.goal, feet).setY(0);
+          const d = want.length();
+          want.normalize();
+          speed = this.cfg.speed;
+          if (d < 1.2 || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(2, 5); ai.goal = null; }
+        }
+      } else if (ai.mode === 'chat') {
+        const o = ai.partner;
+        if (!o || o.dead || o.state !== 'standing' || o.ai.partner !== this || ai.t <= 0) this.endChat();
+        else {
+          const to = o.origin().sub(feet).setY(0);
+          const d = to.length();
+          if (d > 1.7 * s + 0.4) { want.copy(to.normalize()); speed = this.cfg.speed; }
+          else { face = o.origin(); pose.talk = true; pose.seed = this.id; pose.nod = Math.sin(G.time * 2 + this.id) * 0.08; }
+        }
+      } else if (ai.mode === 'wave') {
+        if (!pp || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
+        else { face = pp; if (ai.t < 2.2) pose.wave = true; }
+      } else {
+        // idle: look around, then decide what to do next
+        ai.look += dt;
+        pose.headYaw = Math.sin(ai.look * 0.9 + this.id) * 0.7;
+        if (ai.t <= 0) this.decide(feet, pp);
+      }
+      // say hi when you walk up to them
+      if (pp && ai.mode !== 'chat' && ai.mode !== 'wave' && G.time - ai.lastWave > 25) {
+        const d = pp.distanceTo(feet);
+        if (d < 7 && d > 2) {
+          const look = G.aim.dir.dot(feet.clone().sub(pp).normalize());
+          if (look > 0.9) { ai.mode = 'wave'; ai.t = 2.6; ai.lastWave = G.time; ai.goal = null; }
+        }
+      }
       if (kind === 'ninja') {
         ai.jump -= dt;
-        if (ai.jump <= 0 && grounded) { ai.jump = rand(0.8, 2.5); b.velocity.y = 9; }
+        if (ai.jump <= 0 && grounded && speed > 0 && this.pathOk(want, 4)) { ai.jump = rand(0.8, 2.5); b.velocity.y = 9; }
       }
+      if (ai.mode === 'walk' && kind === 'ninja') speed = this.cfg.speed;
     }
-    // avoid walking straight into walls: probe ahead
-    ai.probe = (ai.probe || 0) - dt;
-    if (speed > 0 && kind !== 'zombie' && this.burn <= 0 && ai.probe <= 0) {
-      ai.probe = 0.25;
-      const ahead = raycast(new THREE.Vector3(b.position.x, b.position.y, b.position.z), new THREE.Vector3(b.position.x + want.x * 1.2 * s, b.position.y, b.position.z + want.z * 1.2 * s), GROUP.STATIC | GROUP.DYN);
-      // also don't walk off cliffs / into deep water
-      const fx = b.position.x + want.x * 1.6 * s, fz = b.position.z + want.z * 1.6 * s;
-      const floor = raycast(new THREE.Vector3(fx, b.position.y, fz), new THREE.Vector3(fx, b.position.y - 3 * s, fz));
-      const wet = floor && floor.point.y < G.waterY;
-      if (ahead || (grounded && (!floor || wet))) { ai.dir.set(-want.x, 0, -want.z); ai.t = rand(1.5, 3); ai.idle = false; }
-    }
+
+    // never walk off edges, into water or walls (also while fleeing): steer to the nearest safe direction
+    if (speed > 0 && grounded) {
+      const sd = this.safeDir(want, speed, dt);
+      if (sd) want.copy(sd);
+      else { speed = 0; if (ai.mode === 'walk') { ai.goal = null; ai.mode = 'idle'; ai.t = rand(0.5, 1.5); } }
+    } else if (speed > 0 && !grounded) speed *= 0.3;
+
     const tvx = want.x * speed, tvz = want.z * speed;
     const k = grounded ? 10 : 1.5;
     b.velocity.x += (tvx - b.velocity.x) * Math.min(1, k * dt);
     b.velocity.z += (tvz - b.velocity.z) * Math.min(1, k * dt);
-    if (speed > 0.1) {
-      const ty = Math.atan2(want.x, want.z);
+    let ty = null;
+    if (speed > 0.1) ty = Math.atan2(want.x, want.z);
+    else if (face) ty = Math.atan2(face.x - feet.x, face.z - feet.z);
+    if (ty !== null) {
       let d = ty - this.yaw;
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
@@ -421,7 +633,30 @@ export class Dummy {
     const hs = Math.hypot(b.velocity.x, b.velocity.z);
     this.moveAmt += (clamp(hs / 3, 0, 1) - this.moveAmt) * Math.min(1, 8 * dt);
     this.phase += dt * (3 + hs * 2.2) / Math.sqrt(s);
-    poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, { armsUp: panic && kind !== 'zombie', zombie: kind === 'zombie' });
+    poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, pose);
+  }
+
+  // pick the next thing to do: walk somewhere, chat with someone nearby, wave at you, or keep looking around
+  decide(feet, pp) {
+    const ai = this.ai;
+    const r = Math.random();
+    if (r < 0.3) {
+      let best = null, bd = 12;
+      for (const o of G.dummies) {
+        if (o === this || o.state !== 'standing' || o.cfg.ai === 'zombie' || o.ai.mode === 'chat' || o.ai.mode === 'flee') continue;
+        const d = o.origin().distanceTo(feet);
+        if (d < bd) { bd = d; best = o; }
+      }
+      if (best) {
+        const t = rand(4, 9);
+        ai.mode = 'chat'; ai.partner = best; ai.t = t;
+        best.ai.mode = 'chat'; best.ai.partner = this; best.ai.t = t; best.ai.goal = null;
+        return;
+      }
+    }
+    if (r < 0.4 && pp && pp.distanceTo(feet) < 14 && G.time - ai.lastWave > 12) { ai.mode = 'wave'; ai.t = 3; ai.lastWave = G.time; return; }
+    if (r < 0.85) { ai.mode = 'walk'; ai.goal = this.pickGoal(); ai.t = 14; if (ai.goal) return; }
+    ai.mode = 'idle'; ai.t = rand(2, 5);
   }
 
   updateRagdoll(dt) {
@@ -439,6 +674,21 @@ export class Dummy {
     const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length);
     if (sp < 0.9 && !busy) this.still += dt; else this.still = 0;
     const inWater = t.position.y < G.waterY + 0.2;
+    if (this.deadT > 0) {
+      // dead: lie there, then fade out and come back home
+      this.deadT += dt;
+      if (this.deadT > 6 && !held) { this.respawn(); }
+      return;
+    }
+    if (this.ko > 0) {
+      this.ko -= dt;
+      if (Math.random() < dt * 4) {
+        const h = this.parts.head.body.position;
+        FX.particle({ pos: new THREE.Vector3(h.x + rand(-0.3, 0.3), h.y + 0.45 * this.s, h.z + rand(-0.3, 0.3)), vel: new THREE.Vector3(rand(-0.4, 0.4), 0.6, rand(-0.4, 0.4)), color: 0xffe14a, size: 0.12, life: 0.7, glow: true, add: true, gravity: 0 });
+      }
+      if (inWater && this.downTime > 14 && !busy) this.respawn();
+      return;
+    }
     if (this.still > 2.2 && !inWater) {
       const hit = raycast(new THREE.Vector3(t.position.x, t.position.y + 0.3, t.position.z), new THREE.Vector3(t.position.x, t.position.y - 3, t.position.z), GROUP.STATIC | GROUP.DYN);
       const feet = hit ? hit.point : new THREE.Vector3(t.position.x, t.position.y - 0.5, t.position.z);

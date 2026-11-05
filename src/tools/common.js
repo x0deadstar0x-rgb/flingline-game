@@ -36,12 +36,15 @@ export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
   if (!e) { FX.debris(hit.point, 0x8a7a5a, 3, 0.08, 3); return; }
   const d = dummyOf(b);
   if (d) {
-    if (d.state === 'standing') d.knock(dir.clone().multiplyScalar(imp * 1.2));
+    // headshots hurt more
+    const head = b.ent && b.ent.partName === 'head';
+    const hp = dmg * 0.6 * (head ? 2 : 1);
+    if (d.state === 'standing') d.hurt(hp, dir, dir.clone().multiplyScalar(imp * 1.2));
     else {
       const J = Math.min(b.mass, 15) * imp;
       b.applyImpulse(new CANNON.Vec3(dir.x * J, dir.y * J, dir.z * J), new CANNON.Vec3(hit.point.x - b.position.x, hit.point.y - b.position.y, hit.point.z - b.position.z));
       b.wakeUp();
-      d.hurt(dmg, dir);
+      d.hurt(hp, dir);
     }
     FX.debris(hit.point, 0xff4040, 2, 0.06, 3);
     return;
