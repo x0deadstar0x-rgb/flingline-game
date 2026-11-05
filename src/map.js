@@ -293,6 +293,8 @@ function buildIsland() {
     put('car', 10, 0, 38, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.4) });
     put('table', -12, 0, 40); put('melon', -12.4, 0.9, 40); put('pumpkin', -11.5, 0.9, 40.2);
     put('couch', -16, 0, 42); put('piano', 18, 0, 42); put('fridge', 21, 0, 42);
+    // park benches near where people hang out
+    for (const [x, z, a] of [[-6, 46, Math.PI], [6, 46, Math.PI], [-22, 30, Math.PI / 2], [24, 28, -Math.PI / 2]]) put('bench', x, 0, z, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), a) });
     for (let i = 0; i < 4; i++) put('beachball', 62 + rand(-3, 3), 0, rand(-20, 20));
     put('duck', 0, -0.5, 82); put('duck', 8, -0.5, 84);
     put('present', 2, 0, 20); put('crystal', -2, 0, 20);
@@ -444,6 +446,7 @@ function buildCity() {
     for (let i = 0; i < 5; i++) put('car', -30 + i * 12, 0, 20, {});
     for (let i = 0; i < 14; i++) put('cone', rand(-60, 60), 0, 20 + rand(-1.5, 1.5));
     for (let i = 0; i < 10; i++) put('lamp', -60 + i * 13, 0, 13.5);
+    for (let i = 0; i < 5; i++) put('bench', -52 + i * 26, 0, 14.5); // facing the street
     for (let i = 0; i < 6; i++) put('barrier', 18 + rand(-1, 1), 0, -20 + i * 3);
     for (let i = 0; i < 5; i++) put('mailbox', rand(-12, 12), 0, rand(-12, 12));
     put('vending', 6, 0, 6); put('vending', 7.3, 0, 6);

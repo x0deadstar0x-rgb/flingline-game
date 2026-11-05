@@ -213,7 +213,13 @@ export const CATALOG = [
     { t: 'box', size: [2, 0.12, 0.45], off: [0, -0.05, 0.42], tex: 'keys' },
     { t: 'box', size: [0.15, 0.6, 0.4], off: [-0.92, -0.42, 0.42], tex: 'piano' },
     { t: 'box', size: [0.15, 0.6, 0.4], off: [0.92, -0.42, 0.42], tex: 'piano' }] }),
-  B('couch', 'Couch', '🛋️', 'Stuff', { shape: 'compound', mat: 'wood', parts: [
+  // seats: local spots dummies can sit on (y = top of the seat, front = local +z); hh = half height for placing on the ground
+  B('bench', 'Park Bench', '🪑', 'Stuff', { shape: 'compound', mat: 'wood', hh: 0.5, seats: [[-0.45, 0.05, 0.04], [0.45, 0.05, 0.04]], parts: [
+    { t: 'box', size: [1.8, 0.1, 0.5], off: [0, 0, 0], tex: 'plank' },
+    { t: 'box', size: [1.8, 0.45, 0.08], off: [0, 0.3, -0.22], tex: 'plank' },
+    { t: 'box', size: [0.1, 0.45, 0.5], off: [-0.8, -0.27, 0], color: 0x2d3138 },
+    { t: 'box', size: [0.1, 0.45, 0.5], off: [0.8, -0.27, 0], color: 0x2d3138 }] }),
+  B('couch', 'Couch', '🛋️', 'Stuff', { shape: 'compound', mat: 'wood', hh: 0.25, seats: [[-0.5, 0.25, 0.1], [0.5, 0.25, 0.1]], parts: [
     { t: 'box', size: [2.1, 0.5, 0.95], off: [0, 0, 0], tex: 'couch' },
     { t: 'box', size: [2.1, 0.65, 0.25], off: [0, 0.55, -0.35], tex: 'couch' },
     { t: 'box', size: [0.25, 0.35, 0.95], off: [-0.95, 0.42, 0], tex: 'couch' },
@@ -944,6 +950,7 @@ export function spawnItem(id, pos, opts = {}) {
 }
 
 export function halfHeight(def) {
+  if (def.hh) return def.hh;
   if (def.shape === 'box') {
     if (def.rot) return Math.max(...def.size) / 2;
     return def.size[1] / 2;
@@ -1031,12 +1038,30 @@ export const isBigBuild = (kind) => !!BIG[kind];
 // Dry run of a big build: where every block would go (no bodies made).
 function planBig(kind, pos, yaw) {
   const out = [];
-  BIG[kind]((id, x, y, z) => {
+  const inv = yq(-yaw);
+  BIG[kind]((id, x, y, z, extra = {}) => {
     const d = ITEMS[id];
     const half = d.size ? Math.max(d.size[0], d.size[2]) / 2 : d.r;
-    out.push({ x, y, z, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
+    // local rotation (the builders pass world rotations that already include yaw)
+    const lq = extra.quat ? inv.clone().multiply(extra.quat) : null;
+    out.push({ id, x, y, z, lq, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
   }, yaw, pos, {});
   return out;
+}
+
+// see-through copy of a whole big build, in local space (set the group's
+// position to the base point and rotation.y to the yaw to place it)
+const bigGhostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false });
+export function makeBigGhost(kind) {
+  const g = new THREE.Group();
+  for (const b of planBig(kind, new THREE.Vector3(), 0)) {
+    const m = new THREE.Mesh(makeGeo(ITEMS[b.id].shape, ITEMS[b.id]), bigGhostMat);
+    m.position.set(b.x, b.y, b.z);
+    if (b.lq) m.quaternion.copy(b.lq);
+    g.add(m);
+  }
+  g.userData.mat = bigGhostMat;
+  return g;
 }
 
 // Can this big build go here? Finds the ground height under it and checks for
