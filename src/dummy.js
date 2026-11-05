@@ -1,7 +1,7 @@
 // Dummies ("people"): walk around standing, turn into ragdolls when hit, get back up.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, GROUP, afterStep, rand, clamp, tv, popup, raycast, saveBest } from './core.js';
+import { G, GROUP, afterStep, later, rand, clamp, tv, popup, raycast, saveBest } from './core.js';
 import { MAT } from './items.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
@@ -81,6 +81,7 @@ const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
 // Pose a humanoid (meshes in world space) standing at origin with yaw and animation params.
 export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
   const qy = _q2.setFromAxisAngle(Y, yaw);
+  if (opts.sit) origin = origin.clone().add(new THREE.Vector3(0, -0.45 * s, 0)).addScaledVector(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), -0.1 * s);
   const set = (name, lx, ly, lz, rx, pivotY, rz = 0) => {
     const m = meshes[name];
     if (!m) return;
@@ -95,9 +96,13 @@ export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
   };
   const sw = Math.sin(phase) * 0.7 * amt;
   const bob = 0; // no up/down bounce
-  set('legL', -0.14, 0, 0, sw, 0.8);
-  set('legR', 0.14, 0, 0, -sw, 0.8);
+  const legA = opts.sit ? -Math.PI / 2 + 0.1 : 0;
+  set('legL', -0.14, 0, 0, opts.sit ? legA : sw, 0.8);
+  set('legR', 0.14, 0, 0, opts.sit ? legA : -sw, 0.8);
   let al = -sw, ar = sw;
+  if (opts.sit) { al = -0.5; ar = -0.5; }
+  if (opts.carry) { al = Math.PI - 0.15; ar = Math.PI - 0.15; }
+  if (opts.toss !== undefined) { al = ar = Math.PI - opts.toss * 2.2; }
   if (opts.armsUp) { al = Math.PI + Math.sin(G.time * 18) * 0.4; ar = Math.PI - Math.sin(G.time * 18) * 0.4; }
   if (opts.zombie) { al = ar = -Math.PI / 2 + Math.sin(G.time * 3) * 0.1; }
   if (opts.aim !== undefined) ar = -Math.PI / 2 - opts.aim;
@@ -209,6 +214,7 @@ export class Dummy {
 
   // switch to ragdoll. vel: extra velocity (THREE.Vector3) or null
   knock(vel) {
+    if (this.ai && this.ai.carry) this.dropCarry();
     if (this.state !== 'standing') { if (vel) for (const n of PARTS) { const b = this.parts[n].body; b.velocity.x += vel.x; b.velocity.y += vel.y; b.velocity.z += vel.z; } return; }
     const base = tv(this.body.position.y < -100 ? new CANNON.Vec3() : this.body.velocity);
     if (vel) base.add(vel);
@@ -375,6 +381,7 @@ export class Dummy {
   respawn() {
     // fell out of the world (or died): come back where they first appeared
     this.reportFling();
+    if (this.ai.carry) this.dropCarry();
     this.revive();
     const h = this.home;
     let feet = new THREE.Vector3(h.x + rand(-1.5, 1.5), h.y + 0.5, h.z + rand(-1.5, 1.5));
@@ -394,6 +401,7 @@ export class Dummy {
     else if (this.body) G.world.removeBody(this.body);
     for (const n of PARTS) G.scene.remove(this.meshes[n]);
     if (this.bar) G.scene.remove(this.bar);
+    if (this.ai.carry) this.dropCarry();
     if (this.ai.partner) this.ai.partner.endChat();
     G.dummies.delete(this);
     this.dead = true;
@@ -553,6 +561,7 @@ export class Dummy {
     } else if (threat) {
       // run away from danger
       if (ai.mode === 'chat') this.endChat();
+      if (ai.carry) this.dropCarry();
       ai.mode = 'flee'; ai.t = rand(1.5, 3);
       if (threat.burning) {
         if (Math.random() < dt * 2) ai.dir.set(rand(-1, 1), 0, rand(-1, 1)).normalize();
@@ -589,6 +598,35 @@ export class Dummy {
           if (d > 1.7 * s + 0.4) { want.copy(to.normalize()); speed = this.cfg.speed; }
           else { face = o.origin(); pose.talk = true; pose.seed = this.id; pose.nod = Math.sin(G.time * 2 + this.id) * 0.08; }
         }
+      } else if (ai.mode === 'sit') {
+        // sit down for a rest
+        pose.sit = true;
+        pose.headYaw = Math.sin(G.time * 0.5 + this.id) * 0.5;
+        if (ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(0.5, 1.5); }
+      } else if (ai.mode === 'fetch') {
+        // walk over to a small object to pick it up
+        const it = ai.item;
+        if (!this.canCarry(it) || ai.t <= 0) { ai.item = null; ai.mode = 'idle'; ai.t = rand(1, 2); }
+        else {
+          const to = tv(it.body.position).sub(feet).setY(0);
+          const d = to.length();
+          if (d > 0.9 * s + 0.35) { want.copy(to.normalize()); speed = this.cfg.speed; }
+          else this.pickUp(it);
+        }
+      } else if (ai.mode === 'carry') {
+        // walk about holding it over your head, then throw it
+        pose.carry = true;
+        if (!ai.goal) ai.goal = this.pickGoal();
+        if (ai.goal && ai.t > 1) {
+          want.subVectors(ai.goal, feet).setY(0);
+          if (want.length() < 1.2) ai.goal = null; else { want.normalize(); speed = this.cfg.speed * 0.8; }
+        }
+        if (ai.t <= 0) { ai.mode = 'throw'; ai.t = 0.45; ai.target = this.tossTarget(feet); }
+      } else if (ai.mode === 'throw') {
+        if (ai.target) face = ai.target;
+        pose.toss = clamp(1 - ai.t / 0.45, 0, 1);
+        if (ai.t <= 0.12 && ai.carry) this.throwCarry(ai.target);
+        if (ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
       } else if (ai.mode === 'wave') {
         if (!pp || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
         else { face = pp; if (ai.t < 2.2) pose.wave = true; }
@@ -637,6 +675,87 @@ export class Dummy {
     this.moveAmt += (clamp(hs / 3, 0, 1) - this.moveAmt) * Math.min(1, 8 * dt);
     this.phase += dt * (3 + hs * 2.2) / Math.sqrt(s);
     poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, pose);
+    if (ai.carry) this.holdCarry(pose.toss);
+  }
+
+  // ---- picking things up
+  canCarry(e) {
+    if (!e || e.dead || e.kind !== 'item' || (e.carriedBy && e.carriedBy !== this)) return false;
+    const b = e.body;
+    if (b.type !== CANNON.Body.DYNAMIC && e.carriedBy !== this) return false;
+    if (e.def.explosive || e.def.special === 'balloon' || e.frozen || e.burn > 0 || e.thrusters.length || e.antigrav > 0) return false;
+    if (b.mass > 28 * this.s ** 3 || (e.def.size ? Math.max(...e.def.size) : (e.def.r || 0.5) * 2) * e.scale > 1.3 * this.s) return false;
+    if (G.grab && G.grab.body === b) return false;
+    if (G.ropes.some((r) => r.a === b || r.b === b) || G.welds.some((w) => w.bodyA === b || w.bodyB === b)) return false;
+    return true;
+  }
+  findItem(feet) {
+    let best = null, bd = 11;
+    for (const e of G.ents) {
+      if (e.kind !== 'item' || e.carriedBy) continue;
+      const p = e.body.position;
+      if (Math.abs(p.y - feet.y) > 1.5) continue;
+      const d = Math.hypot(p.x - feet.x, p.z - feet.z);
+      if (d < bd && e.body.velocity.length() < 1 && this.canCarry(e)) { bd = d; best = e; }
+    }
+    return best;
+  }
+  pickUp(e) {
+    const ai = this.ai;
+    e.carriedBy = this;
+    e.body.type = CANNON.Body.KINEMATIC;
+    e.body.collisionResponse = false;
+    e.body.velocity.setZero(); e.body.angularVelocity.setZero();
+    ai.carry = e; ai.item = null; ai.mode = 'carry'; ai.t = rand(2.5, 5); ai.goal = null;
+    sfx.grab(e.body.position);
+  }
+  holdCarry(toss) {
+    const e = this.ai.carry;
+    if (!e || e.dead) { this.ai.carry = null; return; }
+    const hh = (e.def.size ? e.def.size[1] / 2 : e.def.r || 0.5) * e.scale;
+    const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const p = this.origin().add(new THREE.Vector3(0, 2.2 * this.s + hh, 0));
+    if (toss !== undefined) p.addScaledVector(fwd, toss * 0.6 * this.s).y -= toss * 0.5 * this.s;
+    e.body.position.set(p.x, p.y, p.z);
+    e.body.velocity.set(this.body.velocity.x, 0, this.body.velocity.z);
+    e.mesh.position.copy(p);
+    e.mesh.quaternion.copy(e.body.quaternion);
+  }
+  releaseCarry() {
+    const e = this.ai.carry;
+    this.ai.carry = null;
+    if (!e || e.dead) return null;
+    e.carriedBy = null;
+    e.body.type = CANNON.Body.DYNAMIC;
+    e.body.updateMassProperties();
+    e.body.wakeUp();
+    later(0.15, () => { if (!e.dead) e.body.collisionResponse = true; });
+    return e;
+  }
+  dropCarry() { const e = this.releaseCarry(); if (e) e.body.velocity.set(rand(-1, 1), 1, rand(-1, 1)); }
+  throwCarry(target) {
+    const e = this.releaseCarry();
+    if (!e) return;
+    const from = tv(e.body.position);
+    const dir = target ? target.clone().sub(from).setY(0) : new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const dist = clamp(dir.length(), 2, 12);
+    dir.normalize();
+    const vh = clamp(dist * 0.9, 4, 10);
+    e.body.velocity.set(dir.x * vh, 4.5, dir.z * vh);
+    e.body.angularVelocity.set(rand(-4, 4), rand(-4, 4), rand(-4, 4));
+    sfx.fling(from);
+  }
+  // throw towards a friend nearby (for fun), otherwise just somewhere ahead
+  tossTarget(feet) {
+    let best = null, bd = 10;
+    for (const o of G.dummies) {
+      if (o === this || o.state !== 'standing') continue;
+      const d = o.origin().distanceTo(feet);
+      if (d > 3 && d < bd) { bd = d; best = o; }
+    }
+    if (best && Math.random() < 0.6) return best.origin().add(new THREE.Vector3(0, 1, 0));
+    const a = this.yaw + rand(-0.8, 0.8);
+    return feet.clone().add(new THREE.Vector3(Math.sin(a) * 7, 0, Math.cos(a) * 7));
   }
 
   // pick the next thing to do: walk somewhere, chat with someone nearby, wave at you, or keep looking around
@@ -658,6 +777,8 @@ export class Dummy {
       }
     }
     if (r < 0.4 && pp && pp.distanceTo(feet) < 14 && G.time - ai.lastWave > 12) { ai.mode = 'wave'; ai.t = 3; ai.lastWave = G.time; return; }
+    if (r < 0.52 && this.cfg.ai !== 'ninja') { ai.mode = 'sit'; ai.t = rand(5, 12); return; }
+    if (r < 0.68) { const it = this.findItem(feet); if (it) { ai.mode = 'fetch'; ai.item = it; ai.t = 10; return; } }
     if (r < 0.85) { ai.mode = 'walk'; ai.goal = this.pickGoal(); ai.t = 14; if (ai.goal) return; }
     ai.mode = 'idle'; ai.t = rand(2, 5);
   }

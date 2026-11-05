@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, rand, toast, tv, popup } from '../core.js';
-import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand, makeGhost, isBigBuild, checkBig } from '../items.js';
+import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand, makeGhost, isBigBuild, checkBig, makeBigGhost } from '../items.js';
 import { spawnDummy } from '../dummy.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
@@ -119,8 +119,18 @@ export const buildTools = [
         this.bigT = (this.bigT || 0) - dt;
         if (this.bigT <= 0 || this.bigId !== G.spawnId) { this.bigT = 0.2; this.bigId = G.spawnId; this.big = checkBig(bk, p, yaw); }
         showOutline(this.big.corners, this.big.ok);
+        // see-through preview of the whole build
+        if (this.bigGhostKind !== bk) {
+          if (this.bigGhost) G.scene.remove(this.bigGhost);
+          this.bigGhost = makeBigGhost(bk); this.bigGhostKind = bk;
+          G.scene.add(this.bigGhost);
+        }
+        this.bigGhost.visible = true;
+        this.bigGhost.position.set(p.x, this.big.y, p.z);
+        this.bigGhost.rotation.set(0, yaw, 0);
+        this.bigGhost.userData.mat.color.set(this.big.ok ? 0xffffff : 0xff4040);
         G.toolNote = this.big.ok ? 'Fits here — click to build' : this.big.reason;
-      } else { showOutline(null); if (this.bigId) { this.bigId = null; G.toolNote = null; } }
+      } else { showOutline(null); if (this.bigGhost) this.bigGhost.visible = false; if (this.bigId) { this.bigId = null; G.toolNote = null; } }
       // ghost preview for single items
       if (this.ghostId !== G.spawnId) {
         if (this.ghost) G.scene.remove(this.ghost);
@@ -130,7 +140,7 @@ export const buildTools = [
       }
       if (this.ghost) { this.ghost.visible = true; this.ghost.position.copy(p); this.ghost.quaternion.copy(quat); }
     },
-    unequip() { showMarker(null); showOutline(null); this.bigId = null; G.toolNote = null; if (this.ghost) this.ghost.visible = false; },
+    unequip() { showMarker(null); showOutline(null); if (this.bigGhost) this.bigGhost.visible = false; this.bigId = null; G.toolNote = null; if (this.ghost) this.ghost.visible = false; },
   },
   {
     id: 'eraser', name: 'Eraser', icon: '🧽', color: 0xff5c8a, hint: 'Click: delete an object or dummy',

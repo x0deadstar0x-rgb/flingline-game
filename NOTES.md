@@ -27,6 +27,9 @@ three.js render, cannon-es physics, first person only, single click + keyboard c
 - Held dummies flail their arms and legs. HUD shows KOS (knock-outs + downs, each counted once).
 - Fixed old bug: a dummy knocked over before its first frame (Balloon Dummy always) became a ragdoll at the world origin instead of where it was spawned.
 
+- Big builds show a see-through ghost of the whole structure (white/red) — tested to match the real blocks exactly.
+- Dummies sit down for a rest, and pick up small things (balls, ducks, melons, small crates, bricks…; no explosives/balloons/tied things), carry them overhead, then toss them (often at another dummy). Knocking a carrier, a threat, or grabbing the item with the Fling Line makes them drop it.
+
 ## Ideas / next
-- Dummies could sit on benches, form groups, or pick up and throw things.
-- Big builds could get a see-through ghost preview of the whole structure (now only an outline).
+- Dummies could sit on furniture (couch/bench), or gather in groups of 3+ when chatting.
+- Zombies could chase dummies too, not just the player.
