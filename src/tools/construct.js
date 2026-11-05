@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, rand, toast, tv, popup } from '../core.js';
-import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand } from '../items.js';
+import { spawnItem, ITEMS, CATALOG, removeEnt, addRope, addWeld, halfHeight, Strand, makeGhost } from '../items.js';
 import { spawnDummy } from '../dummy.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
@@ -52,21 +52,30 @@ function twoClickUpdate(tool, input, color) {
 export const buildTools = [
   {
     id: 'spawner', name: 'Spawner', icon: '🧰', color: 0x3a86ff, hint: 'Click: spawn the selected item · T: next item · TAB: pick from menu',
-    down() {
-      if (this.cd > 0) return; this.cd = 0.2;
+    // where (and how rotated) the current item would appear
+    placement() {
       const def = ITEMS[G.spawnId];
-      const h = aimPoint(60, 7);
+      const h = aimPoint(40, 7);
       const yaw = G.player.yaw + Math.PI;
       const p = h.point.clone();
-      if (def.dummy || def.prefab) {
-        if (!h.miss) p.y = Math.max(p.y, h.point.y);
-        spawnItem(def, p, { spawned: true, yaw });
-      } else {
+      const quat = def.rot ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...def.rot)) : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      if (!def.dummy && !def.prefab) {
         const hh = halfHeight(def);
         if (h.miss) p.y = Math.max(p.y, 0.5);
         else p.addScaledVector(h.normal, hh + 0.05);
-        spawnItem(def, p, { spawned: true, quat: def.rot ? undefined : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw) });
       }
+      return { def, p, yaw, quat, ground: h.point };
+    },
+    down() {
+      if (this.cd > 0) return; this.cd = 0.2;
+      const { def, p, yaw, quat } = this.placement();
+      // remember what this click made so U can undo it
+      const beforeE = new Set(G.ents), beforeD = new Set(G.dummies);
+      if (def.dummy || def.prefab) spawnItem(def, p, { spawned: true, yaw });
+      else spawnItem(def, p, { spawned: true, quat: def.rot ? undefined : quat });
+      G.spawnLog = G.spawnLog || [];
+      G.spawnLog.push({ ents: [...G.ents].filter((e) => !beforeE.has(e)), dummies: [...G.dummies].filter((d) => !beforeD.has(d)) });
+      if (G.spawnLog.length > 50) G.spawnLog.shift();
       FX.smoke(p, 3, 0xffffff, 0.4);
       sfx.pop();
     },
@@ -76,12 +85,20 @@ export const buildTools = [
         const list = CATALOG;
         const i = list.findIndex((d) => d.id === G.spawnId);
         G.spawnId = list[(i + 1) % list.length].id;
-        toast(`Spawner: ${ITEMS[G.spawnId].icon} ${ITEMS[G.spawnId].name}`);
+        toast(`Spawner: ${ITEMS[G.spawnId].name}`);
       }
-      const h = aimHit(60);
-      showMarker(h ? h.point : null, 0x3a86ff);
+      const { def, p, quat, ground } = this.placement();
+      showMarker(ground, 0xffffff);
+      // ghost preview for single items
+      if (this.ghostId !== G.spawnId) {
+        if (this.ghost) G.scene.remove(this.ghost);
+        this.ghost = def.dummy || def.prefab ? null : makeGhost(def);
+        if (this.ghost) G.scene.add(this.ghost);
+        this.ghostId = G.spawnId;
+      }
+      if (this.ghost) { this.ghost.visible = true; this.ghost.position.copy(p); this.ghost.quaternion.copy(quat); }
     },
-    unequip() { showMarker(null); },
+    unequip() { showMarker(null); if (this.ghost) this.ghost.visible = false; },
   },
   {
     id: 'eraser', name: 'Eraser', icon: '🧽', color: 0xff5c8a, hint: 'Click: delete an object or dummy',
