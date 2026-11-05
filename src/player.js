@@ -40,7 +40,7 @@ export class Player {
     this.tip = tip;
     this.view.add(arm, hand, this.toolMesh);
     this.view.position.set(0.32, -0.28, -0.5);
-    this.view.scale.setScalar(0.32);
+    this.view.scale.setScalar(0.26);
     // always draw the viewmodel on top so it never clips into walls
     [arm, hand, this.toolMesh, tip].forEach((m, i) => { m.renderOrder = 10 + i; m.frustumCulled = false; m.material.depthTest = false; m.material.depthWrite = false; });
     G.camera.add(this.view);
@@ -170,7 +170,8 @@ export class Player {
     G.camera.position.copy(cam);
     G.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
     G.fovPunch = Math.max(0, (G.fovPunch || 0) - dt * 30);
-    const targetFov = (input.sprint && mv.lengthSq() > 0 ? 78 : 72) + (this.flying ? 6 : 0) + G.fovPunch;
+    const baseFov = G.settings ? G.settings.fov : 72;
+    const targetFov = baseFov + (input.sprint && mv.lengthSq() > 0 ? 6 : 0) + (this.flying ? 6 : 0) + G.fovPunch;
     G.camera.fov += (targetFov - G.camera.fov) * Math.min(1, 10 * dt);
     G.camera.updateProjectionMatrix();
     this.camPos.copy(cam);
@@ -194,7 +195,7 @@ export class Player {
     }
     // viewmodel: stays still (no bobbing). Only a small straight-back recoil and the bat swing.
     this.kick = Math.max(0, (this.kick || 0) - dt * 4);
-    this.view.position.set(0.19, -0.15, -0.36 + this.kick * 0.04);
+    this.view.position.set(0.17, -0.135, -0.36 + this.kick * 0.04);
     this.view.rotation.set(this.swing > 0 ? -Math.sin(this.swing * Math.PI) * 1.2 : 0, this.swing > 0 ? Math.sin(this.swing * Math.PI) * 0.8 : 0, 0);
     // hand position used for beams / lines = the tool tip
     G.camera.updateMatrixWorld();

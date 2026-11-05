@@ -5,6 +5,7 @@ import { G, toast } from './core.js';
 import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR } from './tools/index.js';
 import { CATALOG, ITEMS } from './items.js';
 import { MAPS, loadMap } from './map.js';
+import { S, setSetting, DEFAULTS } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -103,6 +104,50 @@ const match = (...fields) => {
   return !q || fields.some((f) => f && f.toLowerCase().includes(q));
 };
 
+function renderSettings(body) {
+  const wrap = document.createElement('div');
+  wrap.className = 'settings';
+  body.appendChild(wrap);
+  const row = (label, sub, ctrl) => {
+    const r = document.createElement('div');
+    r.className = 'srow';
+    r.innerHTML = `<div class="sl"><div class="n">${esc(label)}</div><div class="s">${esc(sub)}</div></div>`;
+    r.appendChild(ctrl);
+    wrap.appendChild(r);
+  };
+  const slider = (key, min, max, step, fmt) => {
+    const box = document.createElement('div'); box.className = 'sctl';
+    const inp = document.createElement('input');
+    inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = S[key];
+    const val = document.createElement('span'); val.className = 'sval'; val.textContent = fmt(S[key]);
+    inp.oninput = () => { setSetting(key, +inp.value); val.textContent = fmt(+inp.value); };
+    box.append(inp, val);
+    return box;
+  };
+  const choice = (key, opts) => {
+    const box = document.createElement('div'); box.className = 'sctl seg';
+    for (const [v, label] of opts) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.className = S[key] === v ? 'on' : '';
+      b.onclick = (e) => { e.stopPropagation(); setSetting(key, v); renderMenu(); };
+      box.appendChild(b);
+    }
+    return box;
+  };
+  row('Mouse sensitivity', 'Also [ and ] in game. Raise it if your touchpad feels slow.', slider('sens', 0.3, 8, 0.1, (v) => v.toFixed(1)));
+  row('Invert look up/down', 'Flip vertical mouse movement.', choice('invertY', [[false, 'Off'], [true, 'On']]));
+  row('Field of view', 'How wide you can see.', slider('fov', 60, 100, 1, (v) => `${v}°`));
+  row('Volume', 'M mutes everything.', slider('volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
+  row('Graphics', 'Low turns off shadows and lowers resolution (much faster). Also L.', choice('quality', [['high', 'High'], ['low', 'Low']]));
+  row('Time of day', 'Night makes explosions and lamps glow.', choice('time', [['day', 'Day'], ['sunset', 'Sunset'], ['night', 'Night']]));
+  const reset = document.createElement('button');
+  reset.className = 'sreset';
+  reset.textContent = 'Reset to defaults';
+  reset.onclick = (e) => { e.stopPropagation(); for (const k in DEFAULTS) setSetting(k, DEFAULTS[k]); renderMenu(); };
+  wrap.appendChild(reset);
+}
+
 function renderHotbarEditor() {
   const row = $('hbedit');
   row.innerHTML = '';
@@ -121,6 +166,7 @@ export function renderMenu() {
   body.innerHTML = '';
   document.querySelectorAll('#menunav button[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === UI.tab));
   $('menusearch').style.visibility = UI.tab === 'tools' || UI.tab === 'items' ? 'visible' : 'hidden';
+  $('menuhead').classList.toggle('nosearch', !(UI.tab === 'tools' || UI.tab === 'items'));
   renderHotbarEditor();
   if (UI.tab === 'tools') {
     $('menutitle').textContent = 'Tools';
@@ -151,6 +197,10 @@ export function renderMenu() {
     const grid = section(body, 'All maps');
     grid.classList.add('wide');
     for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, () => { loadMap(m.id); closeMenu(); toast(m.name); }, G.mapId === m.id));
+  } else if (UI.tab === 'settings') {
+    $('menutitle').textContent = 'Settings';
+    $('menusub').textContent = 'Saved automatically in this browser.';
+    renderSettings(body);
   } else {
     $('menutitle').textContent = 'Controls';
     $('menusub').textContent = 'Single click + keyboard only. No right-click or two-finger click needed.';

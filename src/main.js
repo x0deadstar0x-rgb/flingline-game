@@ -2,12 +2,13 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, updatePopups, updateToast, toast } from './core.js';
-import { initAudio, toggleMute, setListener } from './audio.js';
+import { initAudio, toggleMute, setListener, setVolume } from './audio.js';
+import { S, setSetting, onSetting, applyAll } from './settings.js';
 import { updateGrabFx } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
-import { loadMap, updateMap } from './map.js';
+import { loadMap, updateMap, applyTime } from './map.js';
 import { TOOL, updateProjectiles, updateBlackHoles } from './tools/index.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
 
@@ -35,7 +36,9 @@ const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerH
 G.camera = camera;
 scene.add(camera);
 
-scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x6b5a3a, 1.1));
+const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x6b5a3a, 1.1);
+scene.add(hemi);
+G.hemi = hemi;
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.2);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -72,8 +75,6 @@ const input = {
   held: (c) => keys.has(c),
   tap: (c) => taps.has(c),
 };
-let sens = 0.0022;
-try { sens = parseFloat(localStorage.getItem('fling_sens')) || sens; } catch (e) { /* ignore */ }
 let playing = false;
 let lockFailed = false;
 
@@ -118,8 +119,9 @@ document.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement === canvas || lockFailed) {
     // clamp spikes (some browsers report a huge jump right after locking)
     const mx = Math.max(-200, Math.min(200, e.movementX)), my = Math.max(-200, Math.min(200, e.movementY));
+    const sens = S.sens / 1000;
     input.lookX += mx * sens;
-    input.lookY += my * sens;
+    input.lookY += my * sens * (S.invertY ? -1 : 1);
   }
 });
 
@@ -142,12 +144,11 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH') openMenu('help');
   if (e.code === 'KeyC') { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
   if (e.code === 'KeyP') { loadMap(G.mapId); toast('Map reset'); }
-  if (e.code === 'KeyL') { G.quality = 1 - G.quality; renderer.shadowMap.enabled = !!G.quality; renderer.setPixelRatio(G.quality ? Math.min(window.devicePixelRatio, 1.5) : 0.75); scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; }); toast(G.quality ? 'Graphics: HIGH' : 'Graphics: LOW (faster)'); }
+  if (e.code === 'KeyL') { setSetting('quality', S.quality === 'high' ? 'low' : 'high'); toast(S.quality === 'high' ? 'Graphics: high' : 'Graphics: low (faster)'); }
+  if (e.code === 'KeyU') undoSpawn();
   if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
-    sens *= e.code === 'BracketLeft' ? 0.85 : 1.18;
-    sens = Math.min(0.02, Math.max(0.0003, sens));
-    try { localStorage.setItem('fling_sens', String(sens)); } catch (er) { /* ignore */ }
-    toast(`Mouse sensitivity: ${(sens * 1000).toFixed(1)}`);
+    setSetting('sens', Math.min(12, Math.max(0.3, +(S.sens * (e.code === 'BracketLeft' ? 0.85 : 1.18)).toFixed(2))));
+    toast(`Mouse sensitivity: ${S.sens.toFixed(1)}`);
   }
   if (e.code === 'Enter') { input.mouseDown = true; const t = currentTool(); if (t.down) t.down(); }
 });
@@ -161,6 +162,27 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// settings → engine
+let lastQuality = null;
+onSetting('quality', (q) => {
+  renderer.shadowMap.enabled = q === 'high';
+  renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 1.5) : 0.75);
+  if (lastQuality !== null && lastQuality !== q) scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
+  lastQuality = q;
+});
+onSetting('volume', (v) => setVolume(v));
+onSetting('time', (t) => applyTime(t));
+applyAll();
+
+// undo: removes the last thing you spawned (U)
+function undoSpawn() {
+  const grp = G.spawnLog && G.spawnLog.pop();
+  if (!grp) { toast('Nothing to undo'); return; }
+  for (const e of grp.ents) if (!e.dead) Items.removeEnt(e, false);
+  for (const d of grp.dummies) if (!d.dead) d.remove();
+  toast('Undone');
+}
 
 UI.onEquip = (t) => { G.player.setToolColor(t.color); G.toolNote = null; G.crossHint = null; };
 initMenu();
@@ -218,7 +240,8 @@ function frame() {
 
   // shadows follow the player
   const pp = G.player.body.position;
-  sun.position.set(pp.x + 40, pp.y + 70, pp.z + 25);
+  const so = G.sunOffset || [40, 70, 25];
+  sun.position.set(pp.x + so[0], pp.y + so[1], pp.z + so[2]);
   sun.target.position.set(pp.x, pp.y, pp.z);
 
   taps.clear();

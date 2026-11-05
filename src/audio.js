@@ -4,6 +4,7 @@
 let ctx = null;
 let master = null, comp = null, verb = null;
 let muted = false;
+let volume = 0.8;
 let noiseBuf = null;
 let voices = 0;
 const MAX_VOICES = 26;
@@ -16,7 +17,7 @@ export function initAudio() {
     comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -18; comp.ratio.value = 6;
     master = ctx.createGain();
-    master.gain.value = 0.55;
+    master.gain.value = muted ? 0 : 0.7 * volume;
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
@@ -34,8 +35,12 @@ export function initAudio() {
 
 export function toggleMute() {
   muted = !muted;
-  if (master) master.gain.value = muted ? 0 : 0.55;
+  if (master) master.gain.value = muted ? 0 : 0.7 * volume;
   return muted;
+}
+export function setVolume(v) {
+  volume = v;
+  if (master) master.gain.value = muted ? 0 : 0.7 * volume;
 }
 
 // called every frame with the camera position and its right vector

@@ -307,6 +307,14 @@ function buildMesh(def, color) {
   return m;
 }
 
+// see-through preview of an item (used by the Spawner)
+const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28, depthWrite: false });
+export function makeGhost(def) {
+  const m = buildMesh(def);
+  m.traverse((o) => { if (o.isMesh) { o.material = ghostMat; o.castShadow = false; o.receiveShadow = false; } });
+  return m;
+}
+
 // Create a physical item entity. opts: {quat, vel, angVel, gen, spawned, scale, color, sleep, mass}
 export function createEnt(def, pos, opts = {}) {
   const mat = MAT[def.mat] || MAT.wood;
