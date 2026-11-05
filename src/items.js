@@ -1026,6 +1026,66 @@ const BIG = {
   },
 };
 
+export const isBigBuild = (kind) => !!BIG[kind];
+
+// Dry run of a big build: where every block would go (no bodies made).
+function planBig(kind, pos, yaw) {
+  const out = [];
+  BIG[kind]((id, x, y, z) => {
+    const d = ITEMS[id];
+    const half = d.size ? Math.max(d.size[0], d.size[2]) / 2 : d.r;
+    out.push({ x, y, z, half, hy: d.size ? d.size[1] / 2 : d.h / 2, w: yawed(pos, x, y, z, yaw) });
+  }, yaw, pos, {});
+  return out;
+}
+
+// Can this big build go here? Finds the ground height under it and checks for
+// map objects (trees, walls, ramps...) that would sit inside its blocks.
+// Returns { ok, reason, y, corners } — corners = footprint outline in world space.
+export function checkBig(kind, pos, yaw) {
+  const plan = planBig(kind, pos, yaw);
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (const b of plan) { x0 = Math.min(x0, b.x - b.half); x1 = Math.max(x1, b.x + b.half); z0 = Math.min(z0, b.z - b.half); z1 = Math.max(z1, b.z + b.half); }
+  const corners = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => yawed(pos, x, 0, z, yaw));
+  // ground under the footprint
+  let lo = 1e9, hi = -1e9, miss = 0, hiProp = false;
+  const N = 5;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const w = yawed(pos, x0 + (x1 - x0) * i / (N - 1), 0, z0 + (z1 - z0) * j / (N - 1), yaw);
+    const h = raycastStatic(new THREE.Vector3(w.x, pos.y + 25, w.z), new THREE.Vector3(w.x, pos.y - 60, w.z));
+    if (!h || h.point.y < G.waterY) { miss++; continue; }
+    lo = Math.min(lo, h.point.y);
+    if (h.point.y > hi) { hi = h.point.y; hiProp = !h.body.shapes.some((sh) => sh instanceof CANNON.Heightfield); }
+  }
+  const res = { ok: true, reason: '', y: hi > -1e8 ? hi : pos.y, corners };
+  for (const c of corners) c.y = res.y + 0.06;
+  if (miss > 2) return { ...res, ok: false, reason: 'Needs solid ground (no gaps or water)' };
+  if (hi - lo > 1.3) return { ...res, ok: false, reason: hiProp ? 'Something is in the way — find clear ground' : 'Ground too bumpy here — find a flatter spot' };
+  // map objects inside the blocks (the ground itself is fine)
+  const base = new THREE.Vector3(pos.x, res.y, pos.z);
+  const boxes = planBig(kind, base, yaw).map((b) => ({ x: b.w.x, y: b.w.y, z: b.w.z, r: b.half * 0.9, hy: b.hy * 0.9 }));
+  for (const body of G.world.bodies) {
+    const big = body.type !== CANNON.Body.DYNAMIC ? !body.shapes.some((sh) => sh instanceof CANNON.Heightfield) : body.mass > 250; // heavy things (incl. blocks of another big build)
+    if (!big || body.isPlayer) continue;
+    if (body.aabbNeedsUpdate) body.updateAABB();
+    const a = body.aabb;
+    // skip flat floor slabs we are standing on top of
+    if (a.upperBound.y <= res.y + 0.15) continue;
+    for (const b of boxes) {
+      if (a.lowerBound.x < b.x + b.r && a.upperBound.x > b.x - b.r && a.lowerBound.z < b.z + b.r && a.upperBound.z > b.z - b.r && a.lowerBound.y < b.y + b.hy && a.upperBound.y > b.y - b.hy) {
+        return { ...res, ok: false, reason: 'Something is in the way — find clear ground' };
+      }
+    }
+  }
+  return res;
+}
+const _rrS = new CANNON.RaycastResult();
+function raycastStatic(from, to) {
+  _rrS.reset();
+  G.world.raycastClosest(new CANNON.Vec3(from.x, from.y, from.z), new CANNON.Vec3(to.x, to.y, to.z), { collisionFilterMask: GROUP.STATIC, skipBackfaces: true }, _rrS);
+  return _rrS.hasHit ? { point: tv(_rrS.hitPointWorld), body: _rrS.body } : null;
+}
+
 export function buildPrefab(kind, pos, yaw = 0, spawned = true, sleep = false) {
   const o = { spawned, sleep, quat: yq(yaw) };
   const put = (id, x, y, z, extra = {}) => createEnt(ITEMS[id], yawed(pos, x, y, z, yaw), { ...o, ...extra });

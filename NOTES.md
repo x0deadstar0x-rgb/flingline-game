@@ -23,8 +23,10 @@ three.js render, cannon-es physics, first person only, single click + keyboard c
 - Balloons: free ones rise gently (~2 m/s), tied ones capped at 5 m/s; lift fades near top speed.
 - Ropes: sideways damping when taut (no endless orbiting). Ropes and welds move to the nearest piece when an object breaks.
 - Light mode (Settings → Theme).
+- Big builds: the Spawner draws the footprint (white = fits, red = blocked) and refuses to build on gaps/water, bumpy ground, or over map props / heavy objects (incl. another big build). `checkBig()` in items.js.
+- Held dummies flail their arms and legs. HUD shows KOS (knock-outs + downs, each counted once).
+- Fixed old bug: a dummy knocked over before its first frame (Balloon Dummy always) became a ragdoll at the world origin instead of where it was spawned.
 
 ## Ideas / next
-- Big builds ignore map props in the footprint; could check for clear ground first and warn.
 - Dummies could react to being held (flail), sit on benches, or form groups.
 - Health/KO counts in the HUD stats (G.stats.kos exists).

@@ -192,6 +192,9 @@ export class Dummy {
     G.world.addBody(body);
     this.body = body;
     this.state = 'standing';
+    // put the limbs in place right away, so a knock before the first frame
+    // turns into a ragdoll here (not at the world origin)
+    poseHumanoid(this.meshes, s, feet, this.yaw, this.phase, 0);
   }
 
   tieBalloons(n) {
@@ -279,7 +282,7 @@ export class Dummy {
     // a big hit (or low health) knocks them out for a while
     if (dmg >= KO_HIT || this.hp < this.maxHp * 0.25) {
       if (this.state === 'standing') this.knock(null);
-      if (this.ko <= 0) popup('KO!', this.center().add(new THREE.Vector3(0, 1.2, 0)), '#ffe14a', 20);
+      if (this.ko <= 0) { popup('KO!', this.center().add(new THREE.Vector3(0, 1.2, 0)), '#ffe14a', 20); G.stats.kos = (G.stats.kos || 0) + 1; }
       this.ko = Math.max(this.ko, rand(4, 7));
     }
   }
@@ -287,10 +290,10 @@ export class Dummy {
   die() {
     this.hp = 0;
     this.deadT = 0.001;
+    if (this.ko <= 0) G.stats.kos = (G.stats.kos || 0) + 1; // already counted if it was knocked out first
     this.ko = 0;
     if (this.state === 'standing') this.knock(null);
     popup('✖ DOWN', this.center().add(new THREE.Vector3(0, 1.3, 0)), '#ff5050', 22);
-    G.stats.kos = (G.stats.kos || 0) + 1;
     // grey out
     for (const n of PARTS) {
       const m = this.meshes[n];
@@ -674,6 +677,16 @@ export class Dummy {
     const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length);
     if (sp < 0.9 && !busy) this.still += dt; else this.still = 0;
     const inWater = t.position.y < G.waterY + 0.2;
+    if (held && this.deadT <= 0 && this.ko <= 0) {
+      // being held: kick and wave the arms and legs about
+      for (const n of ['armL', 'armR', 'legL', 'legR']) {
+        const pb = this.parts[n].body;
+        const ph = G.time * (n.startsWith('arm') ? 13 : 9) + (n.endsWith('L') ? 0 : Math.PI);
+        pb.angularVelocity.x += Math.sin(ph) * 40 * dt; pb.angularVelocity.z += Math.cos(ph * 0.7) * 25 * dt;
+        pb.wakeUp();
+      }
+      if (Math.random() < dt * 0.8) sfx.oof(this.center(), this.pitch * 1.15);
+    }
     if (this.deadT > 0) {
       // dead: lie there, then fade out and come back home
       this.deadT += dt;
