@@ -1,7 +1,7 @@
 // Dummies ("people"): walk around standing, turn into ragdolls when hit, get back up.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, GROUP, afterStep, later, rand, clamp, tv, popup, raycast, saveBest } from './core.js';
+import { G, GROUP, afterStep, later, rand, clamp, tv, popup, raycast, saveBest, drawPos, drawQuat } from './core.js';
 import { MAT } from './items.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
@@ -167,6 +167,11 @@ export class Dummy {
     }
   }
 
+  // feet position for drawing (smoothed between physics steps)
+  drawOrigin() {
+    if (this.state !== 'standing') return this.origin();
+    return tv(drawPos(this.body)).add(new THREE.Vector3(0, -0.95 * this.s, 0));
+  }
   origin() {
     if (this.state === 'standing') return tv(this.body.position).add(new THREE.Vector3(0, -0.95 * this.s, 0));
     return tv(this.parts.torso.body.position).add(new THREE.Vector3(0, -1.17 * this.s, 0));
@@ -727,7 +732,7 @@ export class Dummy {
     const hs = Math.hypot(b.velocity.x, b.velocity.z);
     this.moveAmt += (clamp(hs / 3, 0, 1) - this.moveAmt) * Math.min(1, 8 * dt);
     this.phase += dt * (3 + hs * 2.2) / Math.sqrt(s);
-    poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, pose);
+    poseHumanoid(this.meshes, s, this.drawOrigin(), this.yaw, this.phase, this.moveAmt, pose);
     if (ai.carry) this.holdCarry(pose.toss);
   }
 
@@ -854,7 +859,7 @@ export class Dummy {
     if (!e || e.dead) { this.ai.carry = null; return; }
     const hh = (e.def.size ? e.def.size[1] / 2 : e.def.r || 0.5) * e.scale;
     const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const p = this.origin().add(new THREE.Vector3(0, 2.2 * this.s + hh, 0));
+    const p = this.drawOrigin().add(new THREE.Vector3(0, 2.2 * this.s + hh, 0));
     if (toss !== undefined) p.addScaledVector(fwd, toss * 0.6 * this.s).y -= toss * 0.5 * this.s;
     e.body.position.set(p.x, p.y, p.z);
     e.body.velocity.set(this.body.velocity.x, 0, this.body.velocity.z);
@@ -936,7 +941,7 @@ export class Dummy {
   }
 
   updateRagdoll(dt) {
-    for (const n of PARTS) { const e = this.parts[n]; e.mesh.position.copy(e.body.position); e.mesh.quaternion.copy(e.body.quaternion); }
+    for (const n of PARTS) { const e = this.parts[n]; e.mesh.position.copy(drawPos(e.body)); e.mesh.quaternion.copy(drawQuat(e.body)); }
     const t = this.parts.torso.body;
     if (this.frozen > 0) { this.frozen -= dt; if (this.frozen <= 0) this.unfreeze(); }
     if (this.flingStart) {

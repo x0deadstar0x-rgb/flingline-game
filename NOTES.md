@@ -34,6 +34,8 @@ three.js render, cannon-es physics, first person only, single click + keyboard c
 - Chat groups: up to 5 dummies stand in a circle and take turns talking (`ai.group`).
 - Zombies chase the closest of you or a living dummy; a caught dummy gets hurt and knocked over (dummies already run from zombies within 8 m).
 
+- Smooth drawing: meshes (items, ragdolls, standing dummies, carried things) are drawn at the interpolated physics position (`drawPos`/`drawQuat` in core.js). Before, on 120/144 Hz screens things froze for 1–2 frames then jumped (looked like bobbing/stutter). Tested with a faked 144 Hz clock: frames with no movement 84/143 → 1/143.
+
 ## Ideas / next
 - Dummies could cheer or panic as a crowd when something big happens nearby.
 - Seats on more furniture (bed, table edge) and on the other maps.

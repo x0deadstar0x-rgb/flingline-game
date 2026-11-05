@@ -1,7 +1,7 @@
 // Items: materials, catalog, spawning, damage, breaking, explosions, ropes, welds, thrusters, freeze, scale.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, GROUP, afterStep, later, rand, clamp, tv, popup, wakeAround } from './core.js';
+import { G, GROUP, afterStep, later, rand, clamp, tv, popup, wakeAround, drawPos, drawQuat } from './core.js';
 import { TEX } from './textures.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
@@ -386,8 +386,8 @@ export function createEnt(def, pos, opts = {}) {
 }
 
 export function syncEnt(e) {
-  e.mesh.position.copy(e.body.position);
-  e.mesh.quaternion.copy(e.body.quaternion);
+  e.mesh.position.copy(drawPos(e.body));
+  e.mesh.quaternion.copy(drawQuat(e.body));
 }
 
 function enforceLimit() {
