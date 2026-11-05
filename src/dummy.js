@@ -146,7 +146,7 @@ export class Dummy {
     this.spawned = !!opts.spawned;
     this.yaw = opts.yaw ?? rand(0, Math.PI * 2);
     this.phase = 0; this.moveAmt = 0;
-    this.ai = { mode: 'idle', t: rand(0.5, 3), dir: new THREE.Vector3(), goal: null, partner: null, shove: 0, jump: rand(1, 3), safeT: 0, safe: new THREE.Vector3(), lastWave: -99, look: 0 };
+    this.ai = { mode: 'idle', t: rand(0.5, 3), dir: new THREE.Vector3(), goal: null, group: null, shove: 0, jump: rand(1, 3), safeT: 0, safe: new THREE.Vector3(), lastWave: -99, look: 0 };
     this.maxHp = Math.round(100 * (this.cfg.metal ? 2.5 : 1) * Math.sqrt(this.s));
     this.hp = this.maxHp;
     this.ko = 0;          // knocked out: stays down this many seconds
@@ -215,6 +215,7 @@ export class Dummy {
   // switch to ragdoll. vel: extra velocity (THREE.Vector3) or null
   knock(vel) {
     if (this.ai && this.ai.carry) this.dropCarry();
+    if (this.ai && this.ai.seat) { this.freeSeat(); if (this.ai.mode === 'seated') this.ai.mode = 'idle'; }
     if (this.state !== 'standing') { if (vel) for (const n of PARTS) { const b = this.parts[n].body; b.velocity.x += vel.x; b.velocity.y += vel.y; b.velocity.z += vel.z; } return; }
     const base = tv(this.body.position.y < -100 ? new CANNON.Vec3() : this.body.velocity);
     if (vel) base.add(vel);
@@ -362,7 +363,8 @@ export class Dummy {
     this.clearRagdoll();
     this.makeStanding(feet);
     this.yaw = rand(0, Math.PI * 2);
-    this.ai.mode = 'idle'; this.ai.t = rand(0.5, 2); this.ai.partner = null; this.ai.goal = null;
+    if (this.ai.group) this.endChat();
+    this.ai.mode = 'idle'; this.ai.t = rand(0.5, 2); this.ai.goal = null;
     sfx.pop(feet);
     FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.3, 0)), 4, 0xd9cfb8, 0.5);
   }
@@ -382,6 +384,7 @@ export class Dummy {
     // fell out of the world (or died): come back where they first appeared
     this.reportFling();
     if (this.ai.carry) this.dropCarry();
+    this.freeSeat();
     this.revive();
     const h = this.home;
     let feet = new THREE.Vector3(h.x + rand(-1.5, 1.5), h.y + 0.5, h.z + rand(-1.5, 1.5));
@@ -402,7 +405,8 @@ export class Dummy {
     for (const n of PARTS) G.scene.remove(this.meshes[n]);
     if (this.bar) G.scene.remove(this.bar);
     if (this.ai.carry) this.dropCarry();
-    if (this.ai.partner) this.ai.partner.endChat();
+    this.freeSeat();
+    if (this.ai.group) this.endChat();
     G.dummies.delete(this);
     this.dead = true;
   }
@@ -460,11 +464,18 @@ export class Dummy {
     this.barFill.material.color.setHex(f > 0.5 ? 0x4ade80 : f > 0.25 ? 0xfacc15 : 0xef4444);
   }
 
+  // leave a chat group; a group of one breaks up
   endChat() {
-    const p = this.ai.partner;
-    this.ai.partner = null;
+    const grp = this.ai.group;
+    this.ai.group = null;
     if (this.ai.mode === 'chat') { this.ai.mode = 'idle'; this.ai.t = rand(1, 3); }
-    if (p && p.ai.partner === this) p.endChat();
+    if (!grp) return;
+    grp.members = grp.members.filter((o) => o !== this);
+    if (grp.members.length < 2) for (const o of [...grp.members]) if (o.ai.group === grp) o.endChat();
+  }
+  joinChat(grp) {
+    this.ai.group = grp; this.ai.mode = 'chat'; this.ai.goal = null;
+    if (!grp.members.includes(this)) grp.members.push(this);
   }
 
   // is it OK to walk this way? (solid ground ahead, not a drop, not water, no wall)
@@ -544,17 +555,36 @@ export class Dummy {
     const pp = G.player ? G.player.pos() : null;
     const threat = kind === 'zombie' ? null : this.threat(feet);
     let face = null; // point to turn towards while standing still
+    if (ai.mode === 'seated') {
+      if (threat) this.leaveSeat();
+      else { this.updateSeated(dt); return; }
+    }
 
     if (kind === 'zombie' && pp) {
-      want.subVectors(pp, feet).setY(0);
+      // chase whoever is closest: you, or a (living, standing) dummy
+      ai.pickT = (ai.pickT || 0) - dt;
+      if (ai.pickT <= 0 || (ai.prey && (ai.prey.dead || ai.prey.state !== 'standing' || ai.prey.deadT > 0))) {
+        ai.pickT = 0.5;
+        let best = null, bd = pp.distanceTo(feet);
+        for (const o of G.dummies) {
+          if (o === this || o.cfg.ai === 'zombie' || o.state !== 'standing' || o.deadT > 0) continue;
+          const d = o.origin().distanceTo(feet);
+          if (d < bd && d < 30) { bd = d; best = o; }
+        }
+        ai.prey = best;
+      }
+      const tp = ai.prey ? ai.prey.origin() : pp;
+      want.subVectors(tp, feet).setY(0);
       const d = want.length();
       want.normalize();
       speed = d > 1 ? this.cfg.speed : 0;
       ai.shove -= dt;
       if (d < 1.3 * s + 0.5 && ai.shove <= 0) {
         ai.shove = 1.2;
-        G.player.fling(want.clone().multiplyScalar(9).add(new THREE.Vector3(0, 5, 0)));
-        sfx.oof(pp, this.pitch); popup('BONK', pp.clone().add(new THREE.Vector3(0, 2, 0)), '#8f8', 18);
+        const push = want.clone().multiplyScalar(9).add(new THREE.Vector3(0, 5, 0));
+        if (ai.prey) ai.prey.hurt(22, want, push);
+        else G.player.fling(push);
+        sfx.oof(tp, this.pitch); popup('BONK', tp.clone().add(new THREE.Vector3(0, 2, 0)), '#8f8', 18);
       }
       if (Math.random() < dt * 0.15) sfx.groan(feet);
       pose.zombie = true;
@@ -562,6 +592,7 @@ export class Dummy {
       // run away from danger
       if (ai.mode === 'chat') this.endChat();
       if (ai.carry) this.dropCarry();
+      if (ai.seat) this.freeSeat();
       ai.mode = 'flee'; ai.t = rand(1.5, 3);
       if (threat.burning) {
         if (Math.random() < dt * 2) ai.dir.set(rand(-1, 1), 0, rand(-1, 1)).normalize();
@@ -590,13 +621,35 @@ export class Dummy {
           if (d < 1.2 || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(2, 5); ai.goal = null; }
         }
       } else if (ai.mode === 'chat') {
-        const o = ai.partner;
-        if (!o || o.dead || o.state !== 'standing' || o.ai.partner !== this || ai.t <= 0) this.endChat();
+        const grp = ai.group;
+        if (grp) grp.members = grp.members.filter((o) => !o.dead && o.state === 'standing' && o.ai.group === grp && o.ai.mode === 'chat');
+        if (!grp || grp.members.length < 2 || G.time > grp.end) this.endChat();
         else {
-          const to = o.origin().sub(feet).setY(0);
+          // stand in a little circle around the middle of the group, facing in
+          const c = new THREE.Vector3();
+          for (const o of grp.members) c.add(o.origin());
+          c.divideScalar(grp.members.length).setY(feet.y);
+          const ring = (0.75 + 0.22 * grp.members.length) * Math.max(1, s);
+          const to = c.clone().sub(feet).setY(0);
           const d = to.length();
-          if (d > 1.7 * s + 0.4) { want.copy(to.normalize()); speed = this.cfg.speed; }
-          else { face = o.origin(); pose.talk = true; pose.seed = this.id; pose.nod = Math.sin(G.time * 2 + this.id) * 0.08; }
+          if (d > ring + 0.5) { want.copy(to.normalize()); speed = this.cfg.speed; }
+          else {
+            face = c;
+            // take turns talking
+            const talker = grp.members[Math.floor(G.time / 2.2) % grp.members.length];
+            if (talker === this) { pose.talk = true; pose.seed = this.id; }
+            pose.nod = Math.sin(G.time * 2 + this.id) * 0.08;
+          }
+        }
+      } else if (ai.mode === 'gosit') {
+        // walk to the front of a free seat, then sit on it
+        const st = ai.seat;
+        if (!st || !this.seatOk(st.ent) || (st.ent.seated && st.ent.seated[st.i] && st.ent.seated[st.i] !== this) || ai.t <= 0) { this.freeSeat(); ai.mode = 'idle'; ai.t = rand(1, 2); }
+        else {
+          const { front } = this.seatPoint(st);
+          const to = front.clone().sub(feet).setY(0);
+          if (to.length() > 0.45 * s + 0.25) { want.copy(to.normalize()); speed = this.cfg.speed; }
+          else this.sitOn(st);
         }
       } else if (ai.mode === 'sit') {
         // sit down for a rest
@@ -676,6 +729,93 @@ export class Dummy {
     this.phase += dt * (3 + hs * 2.2) / Math.sqrt(s);
     poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, pose);
     if (ai.carry) this.holdCarry(pose.toss);
+  }
+
+  // ---- sitting on benches / couches
+  seatOk(e) {
+    if (!e || e.dead || !e.def.seats || e.frozen || e.burn > 0 || e.carriedBy) return false;
+    const b = e.body;
+    if (b.velocity.length() > 1.2) return false;
+    const up = b.quaternion.vmult(new CANNON.Vec3(0, 1, 0));
+    return up.y > 0.85; // still upright
+  }
+  seatPoint(st) {
+    const b = st.ent.body, sc = st.ent.scale;
+    const [x, y, z] = st.ent.def.seats[st.i];
+    const top = tv(b.pointToWorldFrame(new CANNON.Vec3(x * sc, y * sc, z * sc)));
+    const f = tv(b.quaternion.vmult(new CANNON.Vec3(0, 0, 1))).setY(0).normalize();
+    const front = top.clone().addScaledVector(f, 0.75 * this.s);
+    return { top, f, front, yaw: Math.atan2(f.x, f.z) };
+  }
+  findSeat(feet) {
+    let best = null, bd = 16;
+    for (const e of G.ents) {
+      if (!e.def.seats || !this.seatOk(e)) continue;
+      const d = tv(e.body.position).distanceTo(feet);
+      if (d >= bd || Math.abs(e.body.position.y - feet.y) > 2) continue;
+      e.seated = e.seated || [];
+      const i = e.def.seats.findIndex((_, k) => !e.seated[k]);
+      if (i < 0) continue;
+      bd = d; best = { ent: e, i };
+    }
+    return best;
+  }
+  sitOn(st) {
+    const ai = this.ai;
+    st.ent.seated = st.ent.seated || [];
+    st.ent.seated[st.i] = this;
+    ai.seat = st; ai.mode = 'seated'; ai.t = rand(8, 18);
+    const b = this.body;
+    b.type = CANNON.Body.KINEMATIC;
+    b.collisionFilterMask = GROUP.PLAYER; // don't shove the seat around
+    b.velocity.setZero();
+  }
+  freeSeat() {
+    const st = this.ai.seat;
+    if (st && st.ent.seated && st.ent.seated[st.i] === this) st.ent.seated[st.i] = null;
+    this.ai.seat = null;
+  }
+  leaveSeat() {
+    const st = this.ai.seat;
+    const b = this.body;
+    let front = null;
+    if (st && !st.ent.dead) front = this.seatPoint(st).front;
+    this.freeSeat();
+    if (b) {
+      b.type = CANNON.Body.DYNAMIC;
+      b.collisionFilterMask = -1;
+      b.updateMassProperties();
+      b.velocity.setZero();
+      if (front) {
+        const g = raycast(front.clone().add(new THREE.Vector3(0, 1.5, 0)), front.clone().add(new THREE.Vector3(0, -3, 0)), GROUP.STATIC | GROUP.DYN);
+        const fy = g ? g.point.y : front.y - 0.5;
+        b.position.set(front.x, fy + 0.95 * this.s + 0.03, front.z);
+      }
+      b.wakeUp();
+    }
+    this.ai.mode = 'idle'; this.ai.t = rand(1, 3);
+  }
+  updateSeated(dt) {
+    const ai = this.ai, st = ai.seat, b = this.body, s = this.s;
+    ai.t -= dt;
+    if (!st || !this.seatOk(st.ent) || ai.t <= 0) { this.leaveSeat(); return; }
+    const sp = this.seatPoint(st);
+    // hips on the seat: in the sit pose the hips are 0.35*s above the (lowered) feet origin
+    b.position.set(sp.top.x + sp.f.x * 0.1 * s, sp.top.y + 0.6 * s, sp.top.z + sp.f.z * 0.1 * s);
+    b.velocity.setZero();
+    this.yaw = sp.yaw;
+    // anything flying into a sitting dummy knocks it off
+    for (const o of G.world.bodies) {
+      if (o.type !== CANNON.Body.DYNAMIC || o === st.ent.body || o.velocity.lengthSquared() < 36) continue;
+      if (Math.abs(o.position.x - b.position.x) < 0.9 && Math.abs(o.position.y - b.position.y) < 1.2 && Math.abs(o.position.z - b.position.z) < 0.9) { afterStep(() => this.knock(tv(o.velocity).multiplyScalar(0.5))); break; }
+    }
+    this.moveAmt = 0;
+    poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, 0, { sit: true, headYaw: Math.sin(G.time * 0.4 + this.id) * 0.6, talk: this.seatChat(st) ? true : undefined, seed: this.id });
+  }
+  // someone sitting next to you? then chat a bit
+  seatChat(st) {
+    const others = (st.ent.seated || []).filter((o) => o && o !== this);
+    return others.length > 0 && Math.floor(G.time / 2.5 + this.id) % 2 === 0;
   }
 
   // ---- picking things up
@@ -763,21 +903,33 @@ export class Dummy {
     const ai = this.ai;
     const r = Math.random();
     if (r < 0.3) {
+      // join a chat that's already going (up to 5 people), or start one with someone close
+      let grp = null, gd = 12;
+      for (const o of G.dummies) {
+        const g = o.ai.group;
+        if (o === this || !g || o.ai.mode !== 'chat' || g.members.length >= 5 || G.time > g.end - 3) continue;
+        const d = o.origin().distanceTo(feet);
+        if (d < gd) { gd = d; grp = g; }
+      }
+      if (grp) { this.joinChat(grp); grp.end = Math.max(grp.end, G.time + rand(3, 6)); return; }
       let best = null, bd = 12;
       for (const o of G.dummies) {
-        if (o === this || o.state !== 'standing' || o.cfg.ai === 'zombie' || o.ai.mode === 'chat' || o.ai.mode === 'flee') continue;
+        if (o === this || o.state !== 'standing' || o.cfg.ai === 'zombie' || o.ai.mode === 'chat' || o.ai.mode === 'flee' || o.ai.carry || o.ai.seat || o.deadT > 0) continue;
         const d = o.origin().distanceTo(feet);
         if (d < bd) { bd = d; best = o; }
       }
       if (best) {
-        const t = rand(4, 9);
-        ai.mode = 'chat'; ai.partner = best; ai.t = t;
-        best.ai.mode = 'chat'; best.ai.partner = this; best.ai.t = t; best.ai.goal = null;
+        const g = { members: [], end: G.time + rand(6, 12) };
+        this.joinChat(g); best.joinChat(g);
         return;
       }
     }
     if (r < 0.4 && pp && pp.distanceTo(feet) < 14 && G.time - ai.lastWave > 12) { ai.mode = 'wave'; ai.t = 3; ai.lastWave = G.time; return; }
-    if (r < 0.52 && this.cfg.ai !== 'ninja') { ai.mode = 'sit'; ai.t = rand(5, 12); return; }
+    if (r < 0.56 && this.cfg.ai !== 'ninja') {
+      const st = this.findSeat(feet);
+      if (st) { ai.mode = 'gosit'; ai.seat = st; ai.t = 14; st.ent.seated[st.i] = this; return; } // reserve it
+      if (r < 0.5) { ai.mode = 'sit'; ai.t = rand(5, 12); return; }
+    }
     if (r < 0.68) { const it = this.findItem(feet); if (it) { ai.mode = 'fetch'; ai.item = it; ai.t = 10; return; } }
     if (r < 0.85) { ai.mode = 'walk'; ai.goal = this.pickGoal(); ai.t = 14; if (ai.goal) return; }
     ai.mode = 'idle'; ai.t = rand(2, 5);

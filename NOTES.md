@@ -30,6 +30,10 @@ three.js render, cannon-es physics, first person only, single click + keyboard c
 - Big builds show a see-through ghost of the whole structure (white/red) — tested to match the real blocks exactly.
 - Dummies sit down for a rest, and pick up small things (balls, ducks, melons, small crates, bricks…; no explosives/balloons/tied things), carry them overhead, then toss them (often at another dummy). Knocking a carrier, a threat, or grabbing the item with the Fling Line makes them drop it.
 
+- Seats: new Park Bench item + couches have seat spots (`def.seats`, `def.hh` for ground placement). Dummies walk to a free seat, sit (kinematic body, sit pose), chat with whoever sits next to them, and get up when time's up, when scared, when the seat moves/tips, or when something flies into them. Benches placed on Island and City. Island couch no longer floats 0.65 m in the air.
+- Chat groups: up to 5 dummies stand in a circle and take turns talking (`ai.group`).
+- Zombies chase the closest of you or a living dummy; a caught dummy gets hurt and knocked over (dummies already run from zombies within 8 m).
+
 ## Ideas / next
-- Dummies could sit on furniture (couch/bench), or gather in groups of 3+ when chatting.
-- Zombies could chase dummies too, not just the player.
+- Dummies could cheer or panic as a crowd when something big happens nearby.
+- Seats on more furniture (bed, table edge) and on the other maps.
