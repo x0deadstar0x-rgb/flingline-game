@@ -400,6 +400,9 @@ const MODELS = {
   },
 };
 
+// a fresh copy of a tool's model (used for the menu pictures)
+export function toolModel(id) { const make = MODELS[id] || (() => rayGun(0x555555, 0xffffff)); return make(); }
+
 // ------------------------------------------------------------- arms
 function makeArm(side) {
   const g = new THREE.Group();

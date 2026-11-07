@@ -6,6 +6,7 @@ import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR } from './tools/index.js';
 import { CATALOG, ITEMS } from './items.js';
 import { MAPS, loadMap } from './map.js';
 import { S, setSetting, DEFAULTS } from './settings.js';
+import { thumb } from './thumbs.js';
 import { bindText, ACTIONS, PRESETS, binds, ctl, applyPreset, setBind, keyName, captureNext, saveControls } from './input.js';
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,13 @@ function saveHotbar() { try { localStorage.setItem('fling_hotbar', JSON.stringif
 
 export function currentTool() { return TOOL[UI.hotbar[UI.slot]]; }
 const slotIcon = (id) => (id === 'spawner' ? ITEMS[G.spawnId].icon : TOOL[id].icon);
+const slotKey = (id) => (id === 'spawner' ? 'item:' + G.spawnId : id === 'hands' ? null : 'tool:' + id);
+// an icon: the real model's white silhouette once it has been drawn, the emoji until then
+function iconHTML(key, emoji) {
+  if (!key) return `<span class="i">${emoji}</span>`;
+  const url = thumb(key, (u) => { if (!u) return; document.querySelectorAll(`[data-thumb="${key}"]`).forEach((el) => { el.classList.add('ti'); el.innerHTML = `<img alt="" src="${u}">`; }); });
+  return url ? `<span class="i ti" data-thumb="${key}"><img alt="" src="${url}"></span>` : `<span class="i" data-thumb="${key}">${emoji}</span>`;
+}
 const slotName = (id) => (id === 'spawner' ? ITEMS[G.spawnId].name : TOOL[id].name);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -38,7 +46,7 @@ export function buildHotbar() {
   UI.hotbar.forEach((id, i) => {
     const d = document.createElement('div');
     d.className = 'slot' + (i === UI.slot ? ' on' : '');
-    d.innerHTML = `<span class="k">${(i + 1) % 10}</span><span class="i">${slotIcon(id)}</span>`;
+    d.innerHTML = `<span class="k">${(i + 1) % 10}</span>${iconHTML(slotKey(id), slotIcon(id))}`;
     d.title = slotName(id);
     hb.appendChild(d);
   });
@@ -86,10 +94,10 @@ export function cycleTool(dir) {
   toast(TOOLS[j].name);
 }
 
-function card(icon, name, sub, onClick, active, extra = '') {
+function card(icon, name, sub, onClick, active, extra = '', key = null) {
   const b = document.createElement('button');
   b.className = 'card' + (active ? ' on' : '');
-  b.innerHTML = `<span class="i">${icon}</span><span class="txt"><span class="n">${esc(name)}</span>${sub ? `<span class="s">${esc(sub)}</span>` : ''}</span>${extra}`;
+  b.innerHTML = `${iconHTML(key, icon)}<span class="txt"><span class="n">${esc(name)}</span>${sub ? `<span class="s">${esc(sub)}</span>` : ''}</span>${extra}`;
   b.onclick = (e) => { e.stopPropagation(); onClick(); };
   return b;
 }
@@ -226,7 +234,7 @@ function renderHotbarEditor() {
   UI.hotbar.forEach((id, i) => {
     const s = document.createElement('button');
     s.className = 'hslot' + (i === UI.slot ? ' on' : '');
-    s.innerHTML = `<span class="k">${(i + 1) % 10}</span><span class="i">${slotIcon(id)}</span><span class="n">${esc(slotName(id))}</span>`;
+    s.innerHTML = `<span class="k">${(i + 1) % 10}</span>${iconHTML(slotKey(id), slotIcon(id))}<span class="n">${esc(slotName(id))}</span>`;
     s.onclick = (e) => { e.stopPropagation(); selectSlot(i); renderMenu(); };
     row.appendChild(s);
   });
@@ -248,7 +256,7 @@ export function renderMenu() {
       const grid = section(body, name, l.length);
       for (const t of l) {
         const slotOf = UI.hotbar.indexOf(t.id);
-        grid.appendChild(card(t.icon, t.name, t.hint, () => { setTool(t.id); renderMenu(); }, slotOf === UI.slot, slotOf >= 0 ? `<span class="badge">${(slotOf + 1) % 10}</span>` : ''));
+        grid.appendChild(card(t.icon, t.name, t.desc || t.hint, () => { setTool(t.id); renderMenu(); }, slotOf === UI.slot, slotOf >= 0 ? `<span class="badge">${(slotOf + 1) % 10}</span>` : '', t.id === 'hands' ? null : 'tool:' + t.id));
       }
     }
   } else if (UI.tab === 'items') {
@@ -270,7 +278,7 @@ export function renderMenu() {
       if (!l.length) continue;
       const grid = section(body, c, l.length);
       grid.classList.add('small');
-      for (const d of l) grid.appendChild(card(d.icon, d.name, '', () => { G.spawnId = d.id; setTool('spawner'); closeMenu(); toast(`Spawner · ${d.name}`); }, G.spawnId === d.id));
+      for (const d of l) grid.appendChild(card(d.icon, d.name, '', () => { G.spawnId = d.id; setTool('spawner'); closeMenu(); toast(`Spawner · ${d.name}`); }, G.spawnId === d.id, '', 'item:' + d.id));
     }
   } else if (UI.tab === 'maps') {
     $('menutitle').textContent = 'Maps';

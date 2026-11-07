@@ -321,7 +321,7 @@ function addShapes(body, def, sc) {
   } else body.addShape(makeShape(def.shape, def, sc));
 }
 
-function buildMesh(def, color) {
+export function buildMesh(def, color) {
   if (def.shape === 'compound') {
     const g = new THREE.Group();
     for (const p of def.parts) {
@@ -347,7 +347,22 @@ export function makeGhost(def) {
 }
 
 // Create a physical item entity. opts: {quat, vel, angVel, gen, spawned, scale, color, sleep, mass}
+// "Dry run": record what a prefab would build (for menu pictures) without making anything.
+let DRY = null;
+const FAKE = { fake: true, body: null };
+export function prefabParts(kind) {
+  DRY = [];
+  try { buildPrefab(kind, new THREE.Vector3(0, 0, 0), 0, true, false); } finally { /* keep */ }
+  const out = DRY; DRY = null;
+  return out;
+}
+
 export function createEnt(def, pos, opts = {}) {
+  if (DRY) {
+    const q = opts.quat ? new THREE.Quaternion().copy(opts.quat) : def.rot ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...def.rot)) : new THREE.Quaternion();
+    DRY.push({ def, pos: pos.clone(), quat: q, scale: opts.scale ?? 1 });
+    return FAKE;
+  }
   const mat = MAT[def.mat] || MAT.wood;
   const sc = opts.scale ?? 1;
   const mass = clamp((opts.mass ?? volumeOf(def) * mat.density * (def.massMul ?? 1)) * sc ** 3, 0.08, 3000);
@@ -760,6 +775,7 @@ export function removeRope(r) {
 }
 
 export function addWeld(a, b) {
+  if (!a || !b) return null;
   const c = new CANNON.LockConstraint(a, b, { maxForce: 1e5 });
   c.collideConnected = false;
   G.world.addConstraint(c);
@@ -1153,7 +1169,7 @@ export function buildPrefab(kind, pos, yaw = 0, spawned = true, sleep = false) {
     put('glass', -1.06, 1, 0, { quat: yq(yaw + Math.PI / 2) }); put('glass', 1.06, 1, 0, { quat: yq(yaw + Math.PI / 2) });
     const roof = { ...ITEMS.slab, size: [2.3, 0.3, 1.16] };
     createEnt(roof, yawed(pos, 0, 2.16, -0.58, yaw), o); createEnt(roof, yawed(pos, 0, 2.16, 0.58, yaw), o);
-    spawnDummy(yawed(pos, 0, 0, 0, yaw), 'normal', { spawned });
+    if (DRY) DRY.push({ dummy: true, pos: yawed(pos, 0, 0, 0, yaw) }); else spawnDummy(yawed(pos, 0, 0, 0, yaw), 'normal', { spawned });
   } else if (kind === 'bowling') {
     let k = 0;
     for (let r = 0; r < 4; r++) for (let i = 0; i <= r; i++) { put('pin', (i - r / 2) * 0.45, 0.41, -6 - r * 0.42); k++; }

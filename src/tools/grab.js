@@ -174,6 +174,8 @@ function tryGrab() {
   };
   // what you hold can't push you around (no standing on it to fly)
   body.collisionFilterMask = body.collisionFilterMask & ~GROUP.PLAYER;
+  // the rope's real length: straight right now, it only bends if the thing comes closer
+  G.grab.ropeExtra = hit.point.distanceTo(G.aim.lineHand || G.aim.hand) - dist;
   body.wakeUp();
   body.angularDamping = 0.4;
   G.grab.target.copy(target());
@@ -184,6 +186,7 @@ function tryGrab() {
 function hook(hit) {
   const dist = hit.point.distanceTo(G.aim.start);
   G.grab = { hook: true, anchor: new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z), point: hit.point.clone(), dist: Math.max(LEN_MIN, dist), tension: 0, zip: 0 };
+  G.grab.ropeExtra = hit.point.distanceTo(G.aim.lineHand || G.aim.hand) - G.grab.dist;
   sfx.grab();
   FX.sparks(hit.point, hit.normal, 0xd8d8d8, 10, 4);
   FX.debris(hit.point, 0x8a7a5a, 3, 0.06, 2);
@@ -288,6 +291,14 @@ function anchorHeld() {
   if (anchorEnt(e, at)) { sfx.weld ? sfx.weld() : sfx.drop(); FX.sparks(at, new THREE.Vector3(0, 1, 0), 0x9fe8ff, 10, 3); toast('Anchored — grab it again to free it'); }
 }
 
+// A rope of fixed length L spanning d: perfectly straight when d >= L, otherwise it droops by
+// about half the leftover length (a hanging rope's middle sag).
+function ropeSag(g, d) {
+  const L = g.dist + (g.ropeExtra || 0);
+  if (d >= L - 0.02) return 0;
+  return Math.min(4, 0.5 * Math.sqrt(L * L - d * d));
+}
+
 // The Fling Line is not a hotbar tool: you always have it (grab key, default F / right click).
 // update() runs every frame whatever tool you hold.
 export const line = {
@@ -308,8 +319,7 @@ export const line = {
         g.zip = Math.max(0, g.zip - dt);
         const ap = tv(g.anchor);
         strand.setColor(tmpC.copy(cLoose).lerp(cTight, clamp(g.tension, 0, 1) * 0.6));
-        const d = ap.distanceTo(hand);
-        strand.update(hand, ap, Math.max(0, (g.dist - d) * 0.3), null);
+        strand.update(hand, ap, ropeSag(g, ap.distanceTo(hand)), null);
         G.lineNote = `Hooked · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: zip · ${bindText('grab', 1)}: let go · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel`;
         return;
       }
@@ -320,8 +330,7 @@ export const line = {
       if (wp.distanceTo(hand) > g.dist + 14) { release(); toast('Line snapped!'); return; }
       const tens = g.tension;
       strand.setColor(tmpC.copy(cLoose).lerp(cTight, clamp((tens - 0.4) / 0.6, 0, 1)));
-      const sag = clamp(1 - tens * 1.6, 0, 1) * Math.min(1.2, wp.distanceTo(hand) * 0.08);
-      strand.update(hand, wp, sag, null);
+      strand.update(hand, wp, ropeSag(g, wp.distanceTo(hand)), null);
       return;
     }
     G.lineNote = null;

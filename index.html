@@ -19,6 +19,17 @@
   /* emoji icons drawn as monochrome silhouettes */
   .i { filter: grayscale(1) brightness(0) invert(1); line-height: 1; }
   .on > .i, .card:hover > .i, .hslot:hover > .i { filter: grayscale(1) brightness(0); }
+  /* real-model silhouettes (white pictures): no filter on dark, inverted on white */
+  .i.ti { filter: none !important; display: flex; align-items: center; justify-content: center; }
+  .i.ti img { width: 40px; height: 40px; display: block; object-fit: contain; }
+  .on > .i.ti, .card:hover > .i.ti, .hslot:hover > .i.ti, .hslot.on > .i.ti, .slot.on > .i.ti { filter: invert(1) !important; }
+  body.light .i.ti { filter: invert(1) !important; }
+  body.light .on > .i.ti, body.light .card:hover > .i.ti, body.light .hslot:hover > .i.ti, body.light .hslot.on > .i.ti, body.light .slot.on > .i.ti { filter: none !important; }
+  .card .i.ti { width: 44px; }
+  .grid.small .card .i.ti img { width: 36px; height: 36px; }
+  .slot .i.ti img { width: 42px; height: 42px; }
+  .hslot .i.ti img { width: 32px; height: 32px; }
+  body.light .slot .i.ti { filter: invert(1) !important; } body.light .slot.on .i.ti { filter: none !important; }
 
   /* ---------- start screen */
   #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(5,5,5,0.92); cursor: pointer; }
