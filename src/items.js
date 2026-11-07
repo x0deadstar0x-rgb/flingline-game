@@ -143,7 +143,7 @@ export const CATALOG = [
   B('drum', 'Oil Drum', '🛢️', 'Boom', { shape: 'cyl', r: 0.45, h: 1.2, mat: 'tnt', tex: 'drum', explosive: { power: 0.7, impact: 14, hp: 40, fire: true } }),
   B('gas', 'Gas Canister', '🧯', 'Boom', { shape: 'cyl', r: 0.25, h: 1.0, mat: 'tnt', tex: 'gas', explosive: { power: 0.7, impact: 99, hp: 10, special: 'gas' } }),
   B('firework', 'Firework Box', '🎆', 'Boom', { shape: 'box', size: [0.4, 0.8, 0.4], mat: 'tnt', tex: 'firework', explosive: { power: 0.3, impact: 13, hp: 1, special: 'firework' } }),
-  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 10 } }),
+  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 8, nuke: 0.45 } }),
   B('mine', 'Land Mine', '⚠️', 'Boom', { shape: 'cyl', r: 0.45, h: 0.14, mat: 'metal', color: 0x4a5a3a, explosive: { power: 0.9, impact: 0.8, hp: 1, mine: true } }),
   B('c4', 'C4 Pack', '📟', 'Boom', { shape: 'box', size: [0.5, 0.2, 0.35], mat: 'tnt', color: 0xd9d1b0, explosive: { power: 1.4, impact: 40, hp: 1 } }),
   // Balls
@@ -495,7 +495,8 @@ function onCollide(e) {
 export function damage(ent, dmg, dir, at = null) {
   if (!ent || ent.dead) return;
   if (ent.unbreakable && !(ent.def && ent.def.explosive)) return;
-  if (ent.kind === 'ragpart') { ent.dummy.hurt(dmg, dir); return; }
+  if (ent.kind === 'ragpart' || ent.kind === 'dummybody') { ent.dummy.hurt(dmg, dir); return; }
+  if (!ent.def) return;
   if (ent.frozen) dmg *= 4;
   const def = ent.def;
   if (def.special === 'balloon') { popBalloon(ent); return; }
@@ -676,6 +677,8 @@ export function detonate(ent, delay = 0) {
     if (ent.dead) return;
     const pos = tv(ent.body.position);
     removeEnt(ent, true);
+    // the Nuke Barrel goes off like a small nuke (mushroom cloud, shockwave and all)
+    if (ex.nuke && G.nukeBlast) { G.nukeBlast(pos, ex.nuke * ent.scale, { craterRadius: (ex.crater || 8) * ent.scale }); return; }
     explode(pos, ex.power * ent.scale ** 1.5, { fire: ex.fire, craterRadius: ex.crater ? ex.crater * ent.scale : undefined, rim: ex.crater ? true : undefined });
   });
 }

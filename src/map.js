@@ -178,7 +178,7 @@ const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0
 export function craterRadius(power) { return 1.9 * Math.pow(power, 0.55); }
 export function crater(pos, power, opts = {}) {
   const R = opts.craterRadius ?? craterRadius(power);
-  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.fire ? 0.7 : 1.0 });
+  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.flat ?? (opts.fire ? 0.7 : 1.0), scorch: opts.scorch });
   if (!res) return null;
   const at = new THREE.Vector3(pos.x, res.ground, pos.z);
   const cols = res.sample.length ? res.sample : [0x6b4f35];
@@ -584,6 +584,7 @@ export function loadMap(id) {
   G.scene.add(mapGroup);
   G.pads = [];
   water = null; clouds = []; clearTerrain(); clearCubes(); G.groundAt = null;
+  if (G.clearNukes) G.clearNukes();
   G.mapId = m.id;
   G.map = m;
   G.killY = Math.min(m.killY, DIG_DEPTH - 25); // below the deepest hole you can dig
@@ -607,16 +608,28 @@ const TIMES = {
 };
 let stars = null;
 const lampGlow = new Set();
+// tint the sky (and fog) towards a colour, k 0..1 (0 = back to normal). Used by the nuke.
+const skyBase = { top: new THREE.Color(), bot: new THREE.Color() };
+export function tintSky(color, k) {
+  if (!sky) return;
+  const c = new THREE.Color(color);
+  sky.material.uniforms.top.value.copy(skyBase.top).lerp(c, k * 0.55);
+  sky.material.uniforms.bottom.value.copy(skyBase.bot).lerp(c, k);
+  if (G.scene.fog) G.scene.fog.color.copy(sky.material.uniforms.bottom.value);
+}
+G.tintSky = tintSky;
 export function applyTime(mode) {
   const t = TIMES[mode] || TIMES.day;
   G.timeOfDay = mode;
   if (G.sun) { G.sun.intensity = t.sun; G.sun.color.set(t.sunCol); G.sunOffset = t.sunPos; }
   if (G.hemi) { G.hemi.intensity = t.hemi; G.hemi.color.set(t.hemiSky); G.hemi.groundColor.set(t.hemiGround); }
   if (G.renderer) G.renderer.toneMappingExposure = t.exposure;
+  G.baseExposure = t.exposure;
   const m = G.map;
   if (m && sky) {
     const top = new THREE.Color(m.sky[0]), bot = new THREE.Color(m.sky[1]);
     if (t.tint) { top.lerp(new THREE.Color(t.tint[0]), t.k); bot.lerp(new THREE.Color(t.tint[1]), t.k); }
+    skyBase.top.copy(top); skyBase.bot.copy(bot);
     sky.material.uniforms.top.value.copy(top);
     sky.material.uniforms.bottom.value.copy(bot);
     if (G.scene.fog) G.scene.fog.color.copy(bot);

@@ -34,7 +34,7 @@ const P = {
 };
 const PARTS = Object.keys(P);
 const IMPACT_SAFE = 13;  // impacts slower than this (m/s) don't hurt
-const KO_HIT = 38;       // one hit this big knocks a dummy out
+const KO_HIT = 95;       // one hit this big knocks a dummy out
 
 // small health bar shown above a dummy for a few seconds after it gets hurt
 const barGeo = new THREE.PlaneGeometry(1, 0.09);
@@ -161,7 +161,8 @@ export class Dummy {
     this.yaw = opts.yaw ?? rand(0, Math.PI * 2);
     this.phase = 0; this.moveAmt = 0;
     this.ai = { mode: 'idle', t: rand(0.5, 3), dir: new THREE.Vector3(), goal: null, group: null, shove: 0, jump: rand(1, 3), safeT: 0, safe: new THREE.Vector3(), lastWave: -99, look: 0 };
-    this.maxHp = Math.round(100 * (this.cfg.metal ? 2.5 : 1) * Math.sqrt(this.s));
+    // tough: it takes a lot to put someone down (3x what it used to)
+    this.maxHp = Math.round(300 * (this.cfg.metal ? 2.5 : 1) * Math.sqrt(this.s));
     this.hp = this.maxHp;
     this.ko = 0;          // knocked out: stays down this many seconds
     this.deadT = 0;       // >0 while dead (counts up)
@@ -311,7 +312,7 @@ export class Dummy {
     // a big hit (or low health) knocks them out for a while
     if (dmg >= KO_HIT || this.hp < this.maxHp * 0.25) {
       if (this.state === 'standing') this.knock(null);
-      if (this.ko <= 0) { popup('KO!', this.center().add(new THREE.Vector3(0, 1.2, 0)), '#ffe14a', 20); G.stats.kos = (G.stats.kos || 0) + 1; }
+      if (this.ko <= 0) G.stats.kos = (G.stats.kos || 0) + 1;
       this.ko = Math.max(this.ko, rand(4, 7));
     }
   }
@@ -322,7 +323,6 @@ export class Dummy {
     if (this.ko <= 0) G.stats.kos = (G.stats.kos || 0) + 1; // already counted if it was knocked out first
     this.ko = 0;
     if (this.state === 'standing') this.knock(null);
-    popup('✖ DOWN', this.center().add(new THREE.Vector3(0, 1.3, 0)), '#ff5050', 22);
     // grey out
     for (const n of PARTS) {
       const m = this.meshes[n];
@@ -333,7 +333,7 @@ export class Dummy {
   }
 
   revive() {
-    for (const n of PARTS) { const m = this.meshes[n]; if (m.userData.alive) { m.material = m.userData.alive; m.userData.alive = null; } }
+    for (const n of PARTS) { const m = this.meshes[n]; if (m.userData.alive) { m.material.dispose(); m.material = m.userData.alive; m.userData.alive = null; } }
     this.hp = this.maxHp; this.deadT = 0; this.ko = 0; this.burn = 0;
   }
 
@@ -458,7 +458,7 @@ export class Dummy {
       this.damageHp(dt * 9);
     }
     // slowly heal while fine
-    if (this.deadT <= 0 && this.ko <= 0 && G.time - this.lastHurt > 6) this.hp = Math.min(this.maxHp, this.hp + dt * 6);
+    if (this.deadT <= 0 && this.ko <= 0 && G.time - this.lastHurt > 6) this.hp = Math.min(this.maxHp, this.hp + dt * 18);
     this.updateBar();
     if (this.state === 'standing') this.updateStanding(dt);
     else this.updateRagdoll(dt);
@@ -551,6 +551,7 @@ export class Dummy {
   threat(feet) {
     if (this.burn > 0) return { pos: feet.clone().add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1))), burning: true };
     if (G.time - G.lastBoom.time < 4 && G.lastBoom.pos.distanceTo(feet) < 28) return { pos: G.lastBoom.pos };
+    if (G.dangers) for (const dg of G.dangers) if (dg.until > G.time && dg.pos.distanceTo(feet) < dg.r) return { pos: dg.pos };
     if (G.firePatches) for (const f of G.firePatches) if (f.pos.distanceTo(feet) < f.r + 5) return { pos: f.pos };
     for (const h of G.blackholes) if (h.mesh && h.mesh.position.distanceTo(feet) < 22) return { pos: h.mesh.position };
     if (this.cfg.ai !== 'zombie') {

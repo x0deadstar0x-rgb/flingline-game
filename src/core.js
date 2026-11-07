@@ -108,13 +108,25 @@ export function wakeAround(pos, r) {
 // Floating DOM text popups.
 const popups = [];
 export function popup(text, pos, color = '#fff', size = 22) {
+  // during big events (a nuke...) don't bury the screen in text: small popups are skipped when
+  // lots just appeared, when the same text just popped up nearby, or when it's far away
+  if (size < 28) {
+    let fresh = 0;
+    for (const p of popups) {
+      if (p.t > 0.6) continue;
+      fresh++;
+      if (p.text === text && p.pos.distanceToSquared(pos) < 100) return;
+    }
+    if (fresh >= 4) return;
+    if (G.camera && G.camera.position.distanceToSquared(pos) > 90 * 90) return;
+  }
   const el = document.createElement('div');
   el.className = 'popup';
   el.textContent = text;
   el.style.color = color;
   el.style.fontSize = size + 'px';
   document.getElementById('popups').appendChild(el);
-  popups.push({ el, pos: pos.clone(), t: 0 });
+  popups.push({ el, pos: pos.clone(), t: 0, text });
 }
 const _p = new THREE.Vector3();
 export function updatePopups(dt) {

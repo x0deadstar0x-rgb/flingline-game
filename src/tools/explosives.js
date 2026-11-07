@@ -5,6 +5,7 @@ import { G, rand, popup, later, afterStep, tv } from '../core.js';
 import { spawnItem, createEnt, explode, detonate, addWeld, launchFireworks, addFirePatch, ITEMS } from '../items.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
+import { dropNuke } from '../nuke.js';
 import { aimPoint, projectile, mkMesh, bodiesNear, dummyOf } from './common.js';
 
 function cool(tool, dt) { tool.cd = Math.max(0, (tool.cd || 0) - dt); }
@@ -225,30 +226,12 @@ export const boomTools = [
     update(dt) { cool(this, dt); },
   },
   {
-    id: 'nuke', name: 'Nuke', icon: '☢️', color: 0xe2c21d, hint: 'Click a spot: you asked for it',
+    id: 'nuke', name: 'Nuke', icon: '☢️', color: 0xe2c21d, hint: 'Click a spot: call in a nuke. Get far away. Then further.',
+    desc: 'Air-raid siren, a bomb drops from the sky, then: a blinding flash, a shockwave you can watch tear across the ground, a mushroom cloud, a huge crater and fires. The boom arrives late if you are far away.',
     down() {
-      if (this.cd > 0) return; this.cd = 7;
+      if (this.cd > 0) return; this.cd = 6;
       const h = aimPoint(300, 60);
-      const target = h.point.clone();
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0xe2c21d, flatShading: true }));
-      popup('☢ NUKE INCOMING ☢', target.clone().add(new THREE.Vector3(0, 4, 0)), '#ffe14a', 30);
-      sfx.whistle(2.4);
-      projectile({
-        pos: target.clone().add(new THREE.Vector3(0, 90, 0)), vel: new THREE.Vector3(0, -37, 0), life: 2.4, collide: false, mesh,
-        end: () => {
-          explode(target.clone().add(new THREE.Vector3(0, 1, 0)), 4.5, { fire: true, craterRadius: 14, rim: true });
-          // mushroom cloud
-          for (let i = 0; i < 40; i++) {
-            const a = rand(0, Math.PI * 2), r = rand(0, 5);
-            FX.particle({ pos: target.clone().add(new THREE.Vector3(Math.cos(a) * r, rand(1, 4), Math.sin(a) * r)), vel: new THREE.Vector3(Math.cos(a) * 2, rand(12, 20), Math.sin(a) * 2), color: [0xff8a1c, 0x5a4a3a, 0x8a7a6a][i % 3], size: rand(2, 3.5), life: rand(2.5, 4), gravity: 3, drag: 0.8, grow: 1.6, shrink: false, opacity: 0.85, floor: false, spin: 0.5 });
-          }
-          for (let i = 0; i < 30; i++) {
-            const a = (i / 30) * Math.PI * 2;
-            FX.particle({ pos: target.clone().add(new THREE.Vector3(0, 0.5, 0)), vel: new THREE.Vector3(Math.cos(a) * 30, 1, Math.sin(a) * 30), color: 0xd9cfb8, size: 1.8, life: 1.6, gravity: 0, drag: 1.2, grow: 1, shrink: false, opacity: 0.7, floor: false });
-          }
-          FX.ring(target.clone().add(new THREE.Vector3(0, 0.5, 0)), 30, 0xffffff, 1.2);
-        },
-      });
+      dropNuke(h.point.clone());
     },
     update(dt) { cool(this, dt); },
   },

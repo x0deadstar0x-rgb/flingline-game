@@ -115,6 +115,7 @@ export function updateFx(dt) {
     b.m.material.opacity = 1 - k;
     b.m.material.color.setHSL(0.1 - k * 0.1, 1, 0.6 - k * 0.4);
   }
+  if (held > 0) { if (--held === 0) { flash.intensity = 0; flash.distance = 40; } return; }
   if (flashI > 0) { flashI = Math.max(0, flashI - dt * 60); flash.intensity = flashI; }
 }
 
@@ -161,7 +162,16 @@ export function fireball(pos, size, life = 0.6) {
   b.life = b.max = life; b.size = size;
 }
 
+// The nuke drives the flash light itself for a few seconds (huge range, follows the fireball).
+// held: while > 0 the normal flashes leave it alone.
+let held = 0;
+export function holdFlash(pos, intensity, color, distance) {
+  held = 2;
+  flash.position.copy(pos); flash.color.set(color); flash.distance = distance;
+  flash.intensity = intensity; flashI = 0;
+}
 export function flashAt(pos, intensity = 60, color = 0xffaa55) {
+  if (held > 0) return;
   flash.position.copy(pos);
   flash.color.set(color);
   flashI = Math.max(flashI, intensity);

@@ -7,6 +7,7 @@ import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, 
 import { S, setSetting, onSetting, applyAll } from './settings.js';
 import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
+import { initNuke, updateNukes } from './nuke.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
@@ -66,6 +67,7 @@ Items.initMaterials();
 world.addEventListener('preStep', Items.physicsForces);
 
 initFx(scene);
+initNuke(scene);
 initViewmodel(renderer);
 loadMap('island');
 G.player = new Player();
@@ -355,6 +357,7 @@ function frame() {
   updateBlackHoles(dt);
   updateMap(dt);
   updateFx(dt);
+  updateNukes(dt);
   updatePopups(rdt);
   updateToast(rdt);
   updateHud(rdt);

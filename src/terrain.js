@@ -443,6 +443,22 @@ export function carveTerrain(pos, R, opts = {}) {
   if (minL < Infinity) {
     flood(Math.max(0, ia - 1), Math.min(N - 1, ib + 1), Math.max(0, ja - 1), Math.min(N - 1, jb + 1));
   }
+  // scorched ground further out (only the colour changes, so no physics rebuild)
+  if (opts.scorch > R * 1.25) {
+    const S = opts.scorch;
+    const sa = Math.max(0, Math.floor((pos.x - S - x0) / V)), sb = Math.min(N - 1, Math.ceil((pos.x + S - x0) / V));
+    const ta = Math.max(0, Math.floor((z0 - pos.z - S) / V)), tb = Math.min(N - 1, Math.ceil((z0 - pos.z + S) / V));
+    for (let i = sa; i <= sb; i++) for (let j = ta; j <= tb; j++) {
+      const k = i * N + j;
+      if (burn[k]) continue;
+      const x = x0 + (i + 0.5) * V, z = z0 - (j + 0.5) * V;
+      const d = Math.hypot(x - pos.x, z - pos.z);
+      // patchy towards the edge
+      if (d > S * (0.75 + 0.25 * hash(i * 11 + 7, j * 17 + 3)) || hash(i * 5 + 9, j * 3 + 1) > 1.25 - d / S) continue;
+      burn[k] = 1;
+      markDirty(i, j);
+    }
+  }
   return { removed, sample, ground: g };
 }
 function markDirty(i, j) {
