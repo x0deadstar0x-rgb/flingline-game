@@ -10,6 +10,7 @@ import { initFx, updateFx } from './fx.js';
 import { initNuke, updateNukes } from './nuke.js';
 import { updateBuildings } from './buildings.js';
 import { toggleVehicle, updateVehicle } from './vehicles.js';
+import { updateBubbles } from './dummy.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
@@ -416,6 +417,7 @@ function frame() {
   updateBuildings(dt);
   updateUnderground(rdt);
   updatePopups(rdt);
+  updateBubbles(rdt);
   updateToast(rdt);
   updateHud(rdt);
   updateGrabFx(dt);
