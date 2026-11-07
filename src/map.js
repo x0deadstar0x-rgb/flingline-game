@@ -84,9 +84,9 @@ function tree(x, y, z, s = 1) {
 }
 // lots of trees at once (big maps): a few instanced meshes for all of them, a collider each
 const trunkGeoI = new THREE.CylinderGeometry(0.22, 0.32, 2.2, 6), coneGeoI = new THREE.ConeGeometry(1, 1, 7);
-function forest(list) {
+function forest(list, colors = null) {
   if (!list.length) return;
-  const cols = snowyTrees ? [0xeef4f8] : leafCols;
+  const cols = colors || (snowyTrees ? [0xeef4f8] : leafCols);
   const trunks = new THREE.InstancedMesh(trunkGeoI, smat(0x7a5230), list.length);
   const per = cols.map(() => []);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
@@ -520,6 +520,153 @@ function buildCity() {
   crowd(14, 0, 2, 13); crowd(6, 0, 20, 30); crowd(2, 48, 20, 6, 0, ['zombie']);
 }
 
+// ---- MEGA WORLD: everything in one huge map
+// smooth random noise (value noise), 0..1
+function h2(i, j) { let h = Math.imul(i, 374761393) + Math.imul(j, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967295; }
+function vnoise(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+  const a = h2(i, j), b = h2(i + 1, j), c = h2(i, j + 1), d = h2(i + 1, j + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, z, o = 4) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < o; k++) { s += a * vnoise(x * f + k * 17.3, z * f - k * 9.1); f *= 2.03; a *= 0.5; } return s / (1 - Math.pow(0.5, o)); }
+function ridged(x, z) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < 5; k++) { const n = 1 - Math.abs(vnoise(x * f + k * 31.7, z * f + k * 7.7) * 2 - 1); s += a * n * n; f *= 2.1; a *= 0.5; } return s / 0.97; }
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const WORLD_HALF = 360;
+const VOLCANO = [-215, 225], ACID = [-235, 40, 34], DESERT_X = 150, MEADOW = [0, 40];
+function worldHeight(x, z) {
+  // rolling meadows and hills everywhere
+  let h = 2 + 10 * (fbm(x * 0.0055, z * 0.0055) - 0.45) + 3 * (fbm(x * 0.02, z * 0.02, 3) - 0.5);
+  // a flat-ish meadow where you start
+  const dm = Math.hypot(x - MEADOW[0], z - MEADOW[1]);
+  if (dm < 70) h = h * sstep(25, 70, dm) + 3 * (1 - sstep(25, 70, dm));
+  // the northern mountains
+  const mN = sstep(-90, -210, z);
+  if (mN > 0) h += mN * (35 + 95 * ridged(x * 0.007 + 3, z * 0.007 + 5));
+  // desert in the east: flat sand with terraced mesas
+  const mE = sstep(DESERT_X - 30, DESERT_X + 30, x) * (1 - mN);
+  if (mE > 0) {
+    const mesa = Math.max(0, fbm(x * 0.012 + 40, z * 0.012) - 0.55) * 90;
+    h = h * (1 - mE) + mE * (2.5 + Math.floor(Math.min(28, mesa) / 4) * 4);
+  }
+  // the volcano (with a crater at the top)
+  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
+  if (dv < 125) { const cone = 92 * Math.pow(1 - dv / 125, 1.35); h = Math.max(h, dv < 16 ? 74 : cone); }
+  // the acid swamp in the west: a bowl
+  const da = Math.hypot(x - ACID[0], z - ACID[1]);
+  if (da < ACID[2] + 20) h = Math.min(h, -0.4 + Math.max(0, da - ACID[2] + 6) * 0.45 + 0.4 * Math.sin(x * 0.4 + z * 0.3)); // (above the sea level, so it holds acid, not sea water)
+  // the sea in the south (a rocky headland with a sea cave sticks out)
+  const coast = 230 + 25 * Math.sin(x * 0.012);
+  const sea = sstep(coast, coast + 45, z);
+  if (sea > 0) h = h * (1 - sea) + sea * -12;
+  const dh = Math.hypot(x - 150, z - 262);
+  if (dh < 40) h = Math.max(h, 22 * Math.pow(1 - dh / 40, 0.7) - 2);
+  // the edges (except the sea) rise into hills so you can't fall off
+  const ex = Math.abs(x), ez = -z;
+  if (ex > WORLD_HALF - 30) h += (ex - (WORLD_HALF - 30)) * 1.5;
+  if (ez > WORLD_HALF - 30) h += (ez - (WORLD_HALF - 30)) * 1.5;
+  return h;
+}
+function worldColor(h, x, z) {
+  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
+  if (dv < 125 && h > 4) return h > 70 ? 0x2e2b29 : 0x3d3a38;                 // volcano rock and ash
+  if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) return h < -1 ? 0x4a5a2a : 0x5b6b3a; // swamp
+  if (h < 1.2 && z > 150) return 0xe2cf95;                                     // beach
+  if (h < -1) return 0xc9b27a;                                                 // sea floor
+  if (h > 72) return 0xf2f6f9;                                                 // snowy peaks
+  if (h > 42) return ((Math.floor(h) % 6) < 3) ? 0x7d8288 : 0x868b91;          // mountain rock
+  if (x > DESERT_X && z < -60) return 0xeef3f6;                                // snowfield (north-east)
+  if (x > DESERT_X - 10) return h > 6 ? [0xc8743e, 0xd88a4f, 0xb5622f][Math.floor(h / 4) % 3] : 0xe2b97a; // desert + mesas
+  if (x < -150) return 0x4f8f3e;                                               // forest floor
+  return h > 14 ? 0x6e9f45 : 0x5fae4a;                                         // grass
+}
+function buildWorld() {
+  srand(101);
+  const gh = worldHeight;
+  makeTerrain({
+    W: WORLD_HALF * 2, es: 3, bedrock: -40, height: worldHeight, color: worldColor, stream: true, near: 135, spawn: [MEADOW[0], 0, MEADOW[1]],
+    caves: (stamp, fill) => {
+      // the big mountain north of the meadow: a cave mouth, a long tunnel, a huge crystal cavern
+      tunnel(stamp, [[0, gh(0, -175) + 2, -175, 3.8], [0, 20, -195, 4], [-6, 26, -220, 4.4], [-4, 30, -245, 5]]);
+      for (const [x, y, z, r] of [[0, 34, -265, 18], [12, 30, -278, 12], [-14, 38, -258, 11]]) stamp(x, y, z, r);
+      fill(-6, -268, 2, 10, 60); fill(8, -262, 1.8, 10, 60);
+      // a sealed crystal vault deeper in (dig to it)
+      stamp(0, 44, -305, 6);
+      // the pirates' sea cave in the headland
+      tunnel(stamp, [[150, -0.5, 300, 3.5], [150, 0.5, 282, 3.5], [148, 1.5, 266, 4], [146, 2.5, 256, 5]]);
+      // the desert bunker: a shaft and a room
+      tunnel(stamp, [[230, gh(230, 60) + 1, 60, 1.6], [230, -4, 60, 1.6]]);
+      stamp(232, -7, 63, 5);
+    },
+  });
+  water1(-1, 1100);
+  // pools: the acid swamp and the volcano's lava
+  addPool('acid', ACID[0], ACID[1], ACID[2] + 4, 1.2, mapGroup);
+  addPool('lava', VOLCANO[0], VOLCANO[1], 15.5, 74.6, mapGroup);
+  const F = (x, y, z) => (G.floorAt ? G.floorAt(x, y, z) : y);
+  // ---- forests (instanced)
+  const trees = [], pines = [], dead = [];
+  for (let i = 0; i < 2600 && trees.length < 900; i++) {
+    const x = rr(-340, 340), z = rr(-340, 220), y = gh(x, z);
+    if (y < 1 || y > 42) continue;
+    if (Math.hypot(x - MEADOW[0], z - MEADOW[1]) < 60 || Math.hypot(x - VOLCANO[0], z - VOLCANO[1]) < 125) continue;
+    if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) { if (dead.length < 40) dead.push([x, y - 0.2, z, rr(0.8, 1.3)]); continue; }
+    if (x > DESERT_X - 10 && z > -60) continue;                 // desert: no trees
+    const dense = x < -150 ? 1 : 0.28;
+    if (Math.random() > dense) continue;
+    (x > DESERT_X && z < -60 ? pines : trees).push([x, y - 0.2, z, rr(0.8, 1.6)]);
+  }
+  forest(trees); forest(pines, [0xeef4f8, 0xdfe9f0]);
+  forest(dead, [0x4a3b2a]);
+  for (let i = 0; i < 70; i++) { const x = rr(-340, 340), z = rr(-340, 260), y = gh(x, z); if (y > 0) rock(x, y, z, rr(0.8, 2.6)); }
+  // ---- crystals in the mountain cavern and the vault
+  for (let i = 0; i < 18; i++) { const a = rr(0, 6.28), r = rr(0, 15); crystals(Math.cos(a) * r, 30, -265 + Math.sin(a) * r, rr(0.9, 2.2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
+  crystals(0, 42, -305, 2.4, 0xffd86b);
+  // ---- the sky island above the meadow, and the hidden launch pad in the forest that gets you there
+  const SI = [-40, -10], SY = gh(SI[0], SI[1]) + 78;
+  sbox(22, 2, 22, SI[0], SY, SI[1], 0x5fae4a, 'grass', null, 4);
+  sbox(14, 3, 14, SI[0], SY - 2.4, SI[1], 0x7d6a54);
+  sbox(7, 3, 7, SI[0], SY - 5, SI[1], 0x6b5a46);
+  tree(SI[0] + 6, SY + 1, SI[1] + 5, 1.3); tree(SI[0] - 7, SY + 1, SI[1] - 4, 1.1);
+  pad(SI[0] + 9, gh(SI[0] + 9, SI[1] + 13), SI[1] + 13, new THREE.Vector3(-1.8, 41.5, -2.6), 0xb98cff);
+  // ---- the village where you start
+  sleepy(() => {
+    for (const [x, z, r] of [[-18, 20, 0.2], [18, 22, -0.3], [-22, 58, 3.1], [20, 60, 2.9]]) buildPrefab('house', new THREE.Vector3(x, gh(x, z), z), r, false);
+    for (let i = 0; i < 6; i++) put('lamp', -15 + i * 6, gh(-15 + i * 6, 40) , 34);
+    for (const [x, z] of [[-6, 46], [6, 46]]) put('bench', x, gh(x, z), z);
+    for (const [x, z] of [[-30, 30], [28, 44], [0, 70]]) put('car', x, gh(x, z) + 0.2, z);
+    pallets(-8, gh(-8, 10) + 0.1, 10, 3);
+    put('tnt_mega', 40, gh(40, 10) + 0.3, 10);
+    // the beach and its pier
+    for (let i = 0; i < 6; i++) put('beachball', rr(-60, 60), gh(0, 236) + 1, rr(236, 246));
+    // the desert: a fort, cacti, barrels, a minefield
+    buildPrefab('fort', new THREE.Vector3(240, gh(240, 0), 0), 0, false);
+    for (let i = 0; i < 26; i++) { const x = rr(DESERT_X + 20, 330), z = rr(-50, 200), y = gh(x, z); if (y > 1 && y < 4) put('cactus', x, y, z); }
+    for (let i = 0; i < 10; i++) { const x = rr(200, 260), z = rr(100, 140); put(i % 3 ? 'barrel' : 'drum', x, gh(x, z), z); }
+    // the bunker under the desert: the stash
+    for (let i = 0; i < 4; i++) put('tnt', 230 + i, F(232, -6, 63) + 0.2, 63);
+    put('nuke', 234, F(234, -6, 61) + 0.3, 61);
+    for (let i = 0; i < 4; i++) put('gold', 231 + i * 0.7, F(231, -6, 66) + 0.2, 66);
+    // pirates' treasure in the sea cave, gold in the vault
+    for (let i = 0; i < 5; i++) put('gold', 146 + rr(-2, 2), F(146, 3, 256) + 0.2, 256 + rr(-2, 2));
+    for (let i = 0; i < 6; i++) put('gold', rr(-3, 3), F(0, 44, -305) + 0.2, -305 + rr(-3, 3));
+    for (let i = 0; i < 3; i++) put('gold', SI[0] + rr(-3, 3), SY + 1.3, SI[1] + rr(-3, 3));
+    // snowfield: snowmen and an igloo
+    for (let i = 0; i < 5; i++) { const x = rr(190, 300), z = rr(-160, -80), y = gh(x, z); buildPrefab('snowman', new THREE.Vector3(x, y, z), rr(0, 6), false); }
+    buildPrefab('igloo', new THREE.Vector3(240, gh(240, -120), -120), 0, false);
+    // boulders at the top of a hill, for rolling
+    for (let i = 0; i < 6; i++) put('boulder', -80 + i * 2.6, gh(-80, -60) + 1, -60);
+  });
+  // the pier
+  for (let i = 0; i < 9; i++) sbox(3, 0.3, 4, 0, 0.2, 248 + i * 4, 0x8a6a46, 'plank');
+  for (let i = 0; i < 9; i++) for (const s of [-1.3, 1.3]) sbox(0.3, 4, 0.3, s, -1.6, 248 + i * 4, 0x6e4626);
+  // bunker hatch ring
+  scyl(2.4, 0.4, 230, gh(230, 60) + 0.2, 60, 0x5a6066);
+  // ---- people
+  crowd(10, 0, 40, 18, 3.1); crowd(4, 0, 238, 20, gh(0, 238) + 0.1); crowd(3, 240, 0, 10, gh(240, 0) + 0.1); crowd(2, 230, -110, 8, gh(230, -110) + 0.1);
+  crowd(2, -235, 80, 6, gh(-235, 80) + 0.1, ['zombie']);
+}
+
 // ---- Caves: a mountain full of them
 function cavesHeight(x, z) {
   const e = Math.max(Math.abs(x), Math.abs(z));
@@ -729,6 +876,7 @@ function buildPlayground() {
 export const MAPS = [
   { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
   { id: 'city', name: 'City', icon: '🏙️', desc: 'Huge towers made of blocks: climb the stairs to the roof, blow out the windows, bring them down', build: buildCity, spawn: [0, 1.2, 12], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 110, 420], killY: -30, water: -1000, walk: 118 },
+  { id: 'world', name: 'Mega World', icon: '🌍', desc: 'HUGE: mountains with a crystal cavern, snowfields, a desert with a buried bunker, a beach and sea cave, a forest with an acid swamp, a volcano, a sky island… room for everyone', build: buildWorld, spawn: [MEADOW[0], worldHeight(MEADOW[0], MEADOW[1]) + 2.5, MEADOW[1]], sky: [0x5ea6ff, 0xe3eefc], fog: [0xe3eefc, 170, 700], killY: -40, water: -1, walk: 330 },
   { id: 'caves', name: 'Caves', icon: '🦇', desc: 'A mountain full of caves: a great hall, a crystal grotto, an underground lake, a lava chasm, old mine tunnels, a skylight… and secrets', build: buildCaves, spawn: [0, 2.4, 110], sky: [0x6d8fb8, 0xd9c7a8], fog: [0xd9c7a8, 90, 330], killY: -60, water: -1000, walk: 100 },
   { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
   { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Big rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 100, 360], killY: -30, water: -1, walk: 110 },
