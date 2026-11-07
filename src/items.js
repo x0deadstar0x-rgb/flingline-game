@@ -456,6 +456,7 @@ function onCollide(e) {
 // ---------------------------------------------------------------- damage
 export function damage(ent, dmg, dir) {
   if (!ent || ent.dead) return;
+  if (ent.unbreakable && !(ent.def && ent.def.explosive)) return;
   if (ent.kind === 'ragpart') { ent.dummy.hurt(dmg, dir); return; }
   if (ent.frozen) dmg *= 4;
   const def = ent.def;
@@ -475,7 +476,7 @@ export function damage(ent, dmg, dir) {
 
 const _q = new THREE.Quaternion();
 export function breakEnt(ent, dir, extra = 0) {
-  if (ent.dead) return;
+  if (ent.dead || ent.unbreakable) return;
   const def = ent.def;
   const mat = ent.frozen ? MAT.ice : ent.mat;
   const pos = tv(ent.body.position);

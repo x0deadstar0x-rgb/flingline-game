@@ -145,7 +145,7 @@ function tryGrab() {
   let body = hit.body;
   const d = dummyOf(body);
   const e = body.ent;
-  const loose = d || (e && (body.type === CANNON.Body.DYNAMIC || e.frozen));
+  const loose = d || (e && (body.type === CANNON.Body.DYNAMIC || e.frozen || e.anchored));
   if (!loose) { if (body.type !== CANNON.Body.DYNAMIC) { hook(hit); return; } }
   if (hit.dist > REACH) { toast(`Too far to grab things — get within ${REACH} m (the hook reaches ${HOOK_REACH} m)`); return; }
   let local;
@@ -155,10 +155,12 @@ function tryGrab() {
     let best = null, bd = 1e9;
     for (const n in d.parts) { const pb = d.parts[n].body; const dd = tv(pb.position).distanceTo(hit.point); if (dd < bd) { bd = dd; best = pb; } }
     if (d.frozen) d.unfreeze();
+    for (const n in d.parts) if (d.parts[n].anchored) unanchor(d.parts[n]);
     body = best;
     local = new CANNON.Vec3(0, 0, 0);
   } else {
     if (e && e.frozen) unfreeze(e);
+    if (e && e.anchored) unanchor(e);
     if (e && e.carriedBy) { const c = e.carriedBy; if (c.ai && c.ai.carry === e) c.dropCarry(); else { e.carriedBy = null; body.type = CANNON.Body.DYNAMIC; body.collisionResponse = true; body.updateMassProperties(); } } // snatch it from a dummy carrying it
     if (body.type !== CANNON.Body.DYNAMIC) { toast("Can't grab that"); return; }
     local = body.pointToLocalFrame(new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z));
@@ -239,12 +241,60 @@ export function updateGrabFx(dt) {
   }
 }
 
+// ------------------------------------------------------------- anchoring
+// Anchor: what you hold freezes completely still right where it is (even in mid-air).
+// Grab it again to set it free.
+const anchorMat = new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.9 });
+const anchorGeo = new THREE.OctahedronGeometry(0.09, 0);
+export function anchorEnt(e, at) {
+  const b = e.body;
+  if (!b || e.anchored || e.frozen) return false;
+  e.anchored = true;
+  e.anchorMass = b.mass;
+  b.type = CANNON.Body.STATIC;
+  b.mass = 0; b.updateMassProperties();
+  b.velocity.setZero(); b.angularVelocity.setZero();
+  b.aabbNeedsUpdate = true;
+  if (e.mesh) {
+    // a little glowing pin shows it's anchored
+    const pin = new THREE.Mesh(anchorGeo, anchorMat);
+    const lp = at ? b.pointToLocalFrame(new CANNON.Vec3(at.x, at.y, at.z)) : new CANNON.Vec3();
+    const s = e.scale || 1;
+    pin.position.set(lp.x / s, lp.y / s, lp.z / s);
+    pin.scale.setScalar(1 / s);
+    e.mesh.add(pin);
+    e.anchorPin = pin;
+    e.mesh.position.copy(b.position); e.mesh.quaternion.copy(b.quaternion);
+  }
+  return true;
+}
+export function unanchor(e) {
+  if (!e.anchored) return;
+  e.anchored = false;
+  const b = e.body;
+  b.type = CANNON.Body.DYNAMIC;
+  b.mass = e.anchorMass || 1; b.updateMassProperties();
+  b.wakeUp();
+  if (e.anchorPin) { e.mesh.remove(e.anchorPin); e.anchorPin = null; }
+}
+G.unanchor = unanchor;
+function anchorHeld() {
+  const g = G.grab;
+  if (!g || g.hook) return;
+  const e = g.body.ent;
+  if (!e) return;
+  const at = tv(g.body.pointToWorldFrame(g.local));
+  release(false);
+  if (anchorEnt(e, at)) { sfx.weld ? sfx.weld() : sfx.drop(); FX.sparks(at, new THREE.Vector3(0, 1, 0), 0x9fe8ff, 10, 3); toast('Anchored — grab it again to free it'); }
+}
+
 // The Fling Line is not a hotbar tool: you always have it (grab key, default F / right click).
 // update() runs every frame whatever tool you hold.
 export const line = {
   holding: () => !!G.grab,
   toggle() { if (G.grab) release(); else tryGrab(); },
   throwIt() { throwIt(); },
+  anchor() { anchorHeld(); },
   release(sound = false) { release(sound); },
   update(dt, input, showHint) {
     if (!strand) strand = new Strand(0xffffff, 0.022, 16, true);
@@ -263,7 +313,7 @@ export const line = {
         G.lineNote = `Hooked · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: zip · ${bindText('grab', 1)}: let go · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel`;
         return;
       }
-      G.lineNote = input.held('rotate') ? 'Rotating — move the mouse' : `Holding · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: THROW · ${bindText('grab', 1)}: drop · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: closer/further · ${bindText('rotate', 1)}+mouse: turn`;
+      G.lineNote = input.held('rotate') ? 'Rotating — move the mouse' : `Holding · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: THROW · ${bindText('grab', 1)}: drop · ${bindText('anchor', 1)}: anchor in place · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: closer/further · ${bindText('rotate', 1)}+mouse: turn`;
       g.target.copy(target());
       const wp = tv(g.body.pointToWorldFrame(g.local));
       // only snaps if it gets stuck far behind (e.g. you walked away from something wedged under a building)
@@ -288,7 +338,7 @@ export const line = {
       const h = aimHit(HOOK_REACH);
       G.crossHint = null;
       if (h) {
-        const loose = h.body.type === CANNON.Body.DYNAMIC || dummyOf(h.body) || (h.body.ent && h.body.ent.frozen);
+        const loose = h.body.type === CANNON.Body.DYNAMIC || dummyOf(h.body) || (h.body.ent && (h.body.ent.frozen || h.body.ent.anchored));
         G.crossHint = loose ? (h.dist <= REACH ? 'grab' : null) : 'hook';
       }
     }

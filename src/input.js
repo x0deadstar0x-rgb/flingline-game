@@ -22,6 +22,7 @@ export const ACTIONS = [
   ['reelIn', 'Line shorter (pull closer)', 'Fling Line'],
   ['reelOut', 'Line longer (push away)', 'Fling Line'],
   ['rotate', 'Rotate held thing (hold + mouse) · turn spawn', 'Fling Line'],
+  ['anchor', 'Anchor what you hold (freeze it in mid-air)', 'Fling Line'],
   ['nextItem', 'Next spawn item', 'Tools'],
   ['prevTool', 'Swap tool (back)', 'Tools'],
   ['nextTool', 'Swap tool (next)', 'Tools'],
@@ -48,7 +49,7 @@ const BASE = {
   jump: ['Space'], sprint: ['ShiftLeft', 'ShiftRight'], crouch: ['ControlLeft'], fly: ['KeyN'],
   lookUp: ['ArrowUp'], lookDown: ['ArrowDown'], lookLeft: ['ArrowLeft'], lookRight: ['ArrowRight'],
   use: ['Mouse0', 'Enter'], grab: ['KeyF'], reelIn: ['KeyZ'], reelOut: ['KeyX'], rotate: ['KeyR'],
-  nextItem: ['KeyT'], prevTool: ['KeyQ'], nextTool: ['KeyE'], undo: ['KeyU'], interact: ['KeyV'],
+  anchor: ['KeyQ'], nextItem: ['KeyT'], prevTool: ['Comma'], nextTool: ['Period'], undo: ['KeyU'], interact: ['KeyV'],
   slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'], slot4: ['Digit4'], slot5: ['Digit5'],
   slot6: ['Digit6'], slot7: ['Digit7'], slot8: ['Digit8'], slot9: ['Digit9'], slot10: ['Digit0'],
   menu: ['Tab', 'KeyB'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
@@ -63,7 +64,7 @@ const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]
 export const PRESETS = {
   touchpad: { name: 'Touchpad (no right click)', desc: 'Click uses your tool (or throws what you hold), F grabs. Never needs a right click or two-finger click.', wheel: 'off', binds: with_({}) },
   touchpad_rc: { name: 'Touchpad with right click', desc: 'Two-finger click grabs / drops with the Fling Line, click throws. Two-finger scroll changes the line length.', wheel: 'reel', binds: with_({ grab: ['KeyF', 'Mouse2'] }) },
-  mouse: { name: 'Mouse + keyboard', desc: 'Right click grabs / drops, left click throws or uses your tool, wheel changes the line length (or tool when not holding), middle button rotates.', wheel: 'smart', binds: with_({ grab: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['KeyQ', 'Mouse3'], nextTool: ['KeyE', 'Mouse4'] }) },
+  mouse: { name: 'Mouse + keyboard', desc: 'Right click grabs / drops, left click throws or uses your tool, wheel changes the line length (or tool when not holding), middle button rotates.', wheel: 'smart', binds: with_({ grab: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['Comma', 'Mouse3'], nextTool: ['Period', 'Mouse4'] }) },
 };
 
 export const binds = {};
@@ -76,10 +77,14 @@ function load() {
   ctl.preset = preset;
   ctl.wheel = (saved && ['off', 'reel', 'smart'].includes(saved.wheel)) ? saved.wheel : PRESETS[preset].wheel;
   const base = PRESETS[preset].binds;
+  const fresh = [];
   for (const [id] of ACTIONS) {
     const b = saved && saved.binds && Array.isArray(saved.binds[id]) ? saved.binds[id].filter((c) => typeof c === 'string').slice(0, 3) : null;
     binds[id] = b || [...(base[id] || [])];
+    if (!b && saved) fresh.push(id);
   }
+  // a newly added action keeps its default key: take it off whatever had it before
+  for (const id of fresh) for (const c of binds[id]) for (const k in binds) if (k !== id) binds[k] = binds[k].filter((x) => x !== c);
 }
 load();
 

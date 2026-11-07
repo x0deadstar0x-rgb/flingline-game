@@ -244,6 +244,7 @@ function gameActions(dt) {
   }
   if (!input.held('use')) useLock = false;
   if (input.tap('rotate') && !G.grab && tool.rotate) tool.rotate();
+  if (input.tap('anchor') && G.grab) line.anchor();
   line.update(dt, input, tool.id === 'hands');
   if (tool.update) tool.update(dt, input);
   if (input.held('use') && !useLock && !G.grab && tool.held) { const cd0 = tool.cd || 0; tool.held(dt); if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1); }

@@ -953,7 +953,7 @@ export class Dummy {
     const sp = t.velocity.length();
     const held = G.grab && G.grab.dummy === this;
     const tied = G.ropes.some((r) => PARTS.some((n) => r.a === this.parts[n].body || r.b === this.parts[n].body));
-    const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length);
+    const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length || this.parts[n].anchored);
     if (sp < 0.9 && !busy) this.still += dt; else this.still = 0;
     const inWater = t.position.y < G.waterAt(t.position.x, t.position.z) + 0.2;
     if (held && this.deadT <= 0 && this.ko <= 0) {

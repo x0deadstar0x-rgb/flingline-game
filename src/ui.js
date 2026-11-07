@@ -253,7 +253,17 @@ export function renderMenu() {
     }
   } else if (UI.tab === 'items') {
     $('menutitle').textContent = 'Spawn';
-    $('menusub').textContent = `Choose what the Spawner makes. ${CATALOG.length} things. (T cycles in-game)`;
+    $('menusub').textContent = `Choose what the Spawner makes. ${CATALOG.length} things. (${bindText('nextItem', 1)} cycles in-game)`;
+    // spawn options
+    const opt = document.createElement('div');
+    opt.className = 'spawnopts';
+    const ub = document.createElement('button');
+    ub.className = 'chip' + (S.spawnUnbreakable ? ' on' : '');
+    ub.innerHTML = `<b>Unbreakable</b> ${S.spawnUnbreakable ? 'ON' : 'OFF'}`;
+    ub.title = 'Things you spawn can\'t be broken (explosives still explode)';
+    ub.onclick = (e) => { e.stopPropagation(); setSetting('spawnUnbreakable', !S.spawnUnbreakable); renderMenu(); };
+    opt.appendChild(ub);
+    body.appendChild(opt);
     const cats = [...new Set(CATALOG.map((d) => d.cat))];
     for (const c of cats) {
       const l = CATALOG.filter((x) => x.cat === c && match(x.name, c));
