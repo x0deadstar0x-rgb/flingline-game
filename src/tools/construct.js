@@ -44,7 +44,7 @@ function bigKind(def) { return def && def.prefab && isBigBuild(def.prefab) ? def
 
 // two-click tools (rope / weld) share this
 function pickAnchor() {
-  const h = aimHit(80);
+  const h = aimHit(160);
   if (!h) return null;
   let body = h.body;
   const d = dummyOf(body);
@@ -61,7 +61,7 @@ function twoClickUpdate(tool, input, color) {
   if (!pendStrand) pendStrand = new Strand(color, 0.025, 8, true);
   if (pending && pending.tool === tool.id) {
     const a = tv(pending.body.pointToWorldFrame(pending.local));
-    const h = aimHit(80);
+    const h = aimHit(160);
     pendStrand.setColor(color);
     pendStrand.update(a, h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 10), 0.3);
     G.toolNote = `Click the second point (${bindText('grab', 1)} to cancel)`;
@@ -77,7 +77,7 @@ export const buildTools = [
     // where (and how rotated) the current item would appear
     placement() {
       const def = ITEMS[G.spawnId];
-      const h = aimPoint(40, 7);
+      const h = aimPoint(90, 7);
       const yaw = G.player.yaw + Math.PI + (this.turn || 0);
       const p = h.point.clone();
       const quat = def.rot ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...def.rot)) : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
@@ -152,7 +152,7 @@ export const buildTools = [
     id: 'eraser', name: 'Eraser', icon: '🧽', color: 0xff5c8a, hint: 'Click: delete an object or dummy',
     down() {
       if (this.cd > 0) return; this.cd = 0.08;
-      const h = aimHit(100);
+      const h = aimHit(200);
       if (!h || !h.body.ent) return;
       const d = dummyOf(h.body);
       const p = h.point;
@@ -167,7 +167,7 @@ export const buildTools = [
     id: 'clone', name: 'Cloner', icon: '🧬', color: 0x06d6a0, hint: 'Click: duplicate whatever you aim at',
     down() {
       if (this.cd > 0) return; this.cd = 0.25;
-      const h = aimHit(100);
+      const h = aimHit(200);
       if (!h || !h.body.ent) { toast('Aim at an object'); return; }
       const d = dummyOf(h.body);
       if (d) { spawnDummy(d.origin().add(new THREE.Vector3(rand(-1, 1), 0.3, rand(-1, 1))), d.variant, { spawned: true, scale: d.s / (d.cfg.s || 1) }); sfx.pop(); return; }
@@ -234,7 +234,7 @@ export const buildTools = [
     id: 'thruster', name: 'Thruster', icon: '🔥', color: 0xff9f1c, hint: 'Click a surface: strap a rocket on it (6s)',
     down() {
       if (this.cd > 0) return; this.cd = 0.2;
-      const h = aimHit(80);
+      const h = aimHit(160);
       if (!h || !h.body.ent) { toast('Aim at an object'); return; }
       let body = h.body;
       const d = dummyOf(body);

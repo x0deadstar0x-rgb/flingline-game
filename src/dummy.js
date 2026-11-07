@@ -6,6 +6,8 @@ import { MAT } from './items.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
 
+// how a frozen person looks (one shared material)
+const ICE_SKIN = new THREE.MeshStandardMaterial({ color: 0xaeeaff, transparent: true, opacity: 0.85, emissive: 0x1a5f7a, emissiveIntensity: 0.4, flatShading: true });
 const VARIANTS = {
   normal: { s: 1, mass: 1, speed: 1.7, mat: 'flesh', buoy: 1.4 },
   big:    { s: 1.6, mass: 1, speed: 1.5, mat: 'flesh', buoy: 1.4 },
@@ -341,12 +343,12 @@ export class Dummy {
     for (const n of PARTS) {
       const e = this.parts[n];
       if (e.frozen) continue;
-      e.frozen = 1;
+      e.frozen = Infinity; // the person's own timer (this.frozen) decides when they thaw
       e.origMass = e.body.mass;
       e.body.type = CANNON.Body.STATIC; e.body.mass = 0; e.body.updateMassProperties();
       e.body.velocity.setZero(); e.body.angularVelocity.setZero();
       e.mesh.userData.orig = e.mesh.material;
-      e.mesh.material = new THREE.MeshStandardMaterial({ color: 0xaeeaff, transparent: true, opacity: 0.85, emissive: 0x1a5f7a, emissiveIntensity: 0.4, flatShading: true });
+      e.mesh.material = ICE_SKIN;
     }
   }
   unfreeze() {

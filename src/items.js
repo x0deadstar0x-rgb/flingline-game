@@ -738,11 +738,13 @@ export function explode(pos, power = 1, opts = {}) {
   const tmp = new THREE.Vector3();
   for (const b of [...G.world.bodies]) {
     const e = b.ent;
-    if (e && e.frozen) unfreeze(e);
-    if (b.type !== CANNON.Body.DYNAMIC) continue;
+    if (!e && b.type !== CANNON.Body.DYNAMIC) continue;
     tmp.set(b.position.x - pos.x, b.position.y - pos.y, b.position.z - pos.z);
     const d = tmp.length();
     if (d > R) continue;
+    // a blast thaws frozen things it reaches (and only those)
+    if (e && e.frozen) unfreeze(e);
+    if (b.type !== CANNON.Body.DYNAMIC) continue;
     const f = 1 - d / R;
     tmp.y += 0.6;
     tmp.normalize();
@@ -941,7 +943,7 @@ export function updateEnts(dt) {
     const inW = b.position.y < G.waterAt(b.position.x, b.position.z);
     if (inW && !e.wet && b.velocity.length() > 4) { FX.splash(tv(b.position), 10, clamp(b.mass / 40, 0.5, 1.6)); sfx.splash(b.position); }
     e.wet = inW;
-    if (e.frozen > 0) { e.frozen -= dt; if (e.frozen <= 0) unfreeze(e); }
+    if (e.frozen > 0 && e.kind !== 'ragpart') { e.frozen -= dt; if (e.frozen <= 0) unfreeze(e); }
     if (e.antigrav > 0) {
       e.antigrav -= dt;
       if (Math.random() < 0.3) FX.particle({ pos: tv(b.position), vel: new THREE.Vector3(rand(-1, 1), -1, rand(-1, 1)), color: 0xc77dff, size: 0.12, life: 0.6, glow: true, add: true, gravity: 0 });
