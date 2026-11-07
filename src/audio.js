@@ -9,6 +9,10 @@ let noiseBuf = null;
 let voices = 0;
 const MAX_VOICES = 26;
 const L = { x: 0, y: 0, z: 0, rx: 1, ry: 0, rz: 0 };
+// The real random numbers (taken before anything swaps Math.random for a room's seeded one):
+// sounds only play when they're in range, unmuted and not throttled, so they mustn't use up the
+// shared random numbers on some computers and not others.
+const rnd = Math.random;
 
 export function initAudio() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -21,12 +25,12 @@ export function initAudio() {
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    for (let i = 0; i < d.length; i++) d[i] = rnd() * 2 - 1;
     // small generated reverb for a sense of space
     verb = ctx.createConvolver();
     const len = ctx.sampleRate * 1.2;
     const ir = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) { const ch = ir.getChannelData(c); for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    for (let c = 0; c < 2; c++) { const ch = ir.getChannelData(c); for (let i = 0; i < len; i++) ch[i] = (rnd() * 2 - 1) * Math.pow(1 - i / len, 3); }
     verb.buffer = ir;
     const vg = ctx.createGain(); vg.gain.value = 0.18;
     verb.connect(vg); vg.connect(master);
@@ -103,7 +107,7 @@ function noise(dst, dur, freq, q, vol, type = 'lowpass', delay = 0, attack = 0.0
   const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
   const g = ctx.createGain(); env(g, t, vol, attack, dur);
   src.connect(f); f.connect(g); g.connect(dst);
-  src.start(t, Math.random() * 1.5); src.stop(t + dur + 0.05);
+  src.start(t, rnd() * 1.5); src.stop(t + dur + 0.05);
 }
 function tone(dst, type, f0, f1, dur, vol, delay = 0, attack = 0.004) {
   const t = ctx.currentTime + delay;
@@ -132,7 +136,7 @@ function voice(dst, f0, f1, dur, vol, formants = [700, 1150]) {
   g.connect(dst);
   o.start(t); o.stop(t + dur + 0.05);
 }
-const R = (a, b) => a + Math.random() * (b - a);
+const R = (a, b) => a + rnd() * (b - a);
 let engineNode = null;
 
 export const sfx = {
@@ -194,7 +198,7 @@ export const sfx = {
     if (throttle('oof', 90)) return;
     const o = out(pos, 35, 0.5); if (!o) return;
     const vowels = [[700, 1150], [500, 900], [400, 1900], [600, 1000]];
-    voice(o, pitch * R(0.95, 1.1), pitch * R(0.6, 0.75), R(0.18, 0.3), 0.5, vowels[(Math.random() * vowels.length) | 0]);
+    voice(o, pitch * R(0.95, 1.1), pitch * R(0.6, 0.75), R(0.18, 0.3), 0.5, vowels[(rnd() * vowels.length) | 0]);
   },
   groan(pos = null) { if (throttle('groan', 1200)) return; const o = out(pos, 30, 1); if (!o) return; voice(o, 85, 70, 0.8, 0.4, [450, 800]); },
   boing(pos = null) { if (throttle('boing', 80)) return; const o = out(pos, 50, 0.4); if (!o) return; tone(o, 'sine', 150, 650, 0.3, 0.3); tone(o, 'triangle', 300, 1300, 0.2, 0.06); },
@@ -204,7 +208,7 @@ export const sfx = {
     if (throttle('piano', 120)) return;
     const o = out(pos, 50, 1.2); if (!o) return;
     const notes = [261.6, 311.1, 349.2, 392, 466.2, 523.3];
-    for (let i = 0; i < 3; i++) modal(o, notes[(Math.random() * notes.length) | 0] * (i ? 0.5 : 1), [1, 2, 3.01], 1.0, Math.min(0.15, v * 0.012));
+    for (let i = 0; i < 3; i++) modal(o, notes[(rnd() * notes.length) | 0] * (i ? 0.5 : 1), [1, 2, 3.01], 1.0, Math.min(0.15, v * 0.012));
   },
   splash(pos = null) { if (throttle('splash', 90)) return; const o = out(pos, 50, 0.6); if (!o) return; noise(o, 0.45, 1300, 0.6, 0.35); noise(o, 0.2, 400, 1, 0.2); },
   sizzle(pos = null) { const o = out(pos, 30, 0.7); if (!o) return; noise(o, 0.6, 6500, 0.6, 0.15, 'highpass'); },

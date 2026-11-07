@@ -9,7 +9,8 @@ import * as FX from './fx.js';
 import { sfx } from './audio.js';
 import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater, addGridStatic } from './terrain.js';
 import { setBuildingGroup, clearBuildings } from './buildings.js';
-import { addPool, clearPools, updatePools } from './liquids.js';
+import { addPool, clearPools, updatePools, poolsReady } from './liquids.js';
+import { initVolcano, clearVolcano, updateVolcano } from './volcano.js';
 import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT, makeBuilding } from './city.js';
 import { castle, pyramid, colosseum, lighthouse, greatWall, millTower } from './landmarks.js';
 
@@ -274,7 +275,7 @@ function buildIsland() {
       if (e < 80) return -4.5 * (e - 66) / 14;
       return -4.5 - (e - 80) * 0.4;
     },
-    color: (h) => (h > -0.05 ? 0x5fae4a : h > -3.5 ? 0xe9d29a : 0xc9b27a),
+    color: (h, x, z) => mixc(mixc(0xc9b27a, 0xe9d29a, zone(h, -4.2, -2.8, x, z)), 0x5fae4a, zone(h, -0.7, 0.6, x, z)),
   });
   water1(-1);
   zones = [[0, 34, 8], [-18, 10, 6], [24, -18, 9], [-26, -26, 6], [0, -34, 5], [-5, -8, 8], [14, 22, 10], [-34, 24, 7], [36, 32, 8], [44, -2, 8], [6, 14, 3], [-10, 30, 3], [-45, -10, 6], [-45, 5, 5], [40, -45, 8]];
@@ -405,6 +406,7 @@ function tunnel(stamp, pts) {
 // glowing crystals growing out of a cave floor
 const crystalGeo = new THREE.ConeGeometry(0.2, 1, 5);
 function crystals(x, yHint, z, s, color) {
+  if (G.solidAt && G.solidAt(x, yHint, z)) return; // (inside the rock: not in the cave)
   const fy = G.floorAt ? G.floorAt(x, yHint, z) : -1e9;
   if (fy < -1e8) return;
   const m0 = matCache['cr' + color] || (matCache['cr' + color] = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, flatShading: true, roughness: 0.25 }));
@@ -419,7 +421,7 @@ function crystals(x, yHint, z, s, color) {
 }
 function buildHills() {
   srand(23);
-  makeTerrain({ W: 300, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
+  makeTerrain({ W: 300, es: 3, height: hillsHeight, bedrock: -10, color: (h, x, z) => mixc(mixc(mixc(0xe2cf95, 0x5fae4a, zone(h, -0.4, 1.2, x, z)), 0x7d8288, zone(h, 11.5, 16, x, z)), 0xf4f7fb, zone(h, 19.5, 24, x, z)) });
   water1(-1);
   const gh = groundHeight;
   const cx = 45, cz = -35, cy = gh(cx, cz);
@@ -566,8 +568,24 @@ function vnoise(x, z) {
 function fbm(x, z, o = 4) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < o; k++) { s += a * vnoise(x * f + k * 17.3, z * f - k * 9.1); f *= 2.03; a *= 0.5; } return s / (1 - Math.pow(0.5, o)); }
 function ridged(x, z) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < 5; k++) { const n = 1 - Math.abs(vnoise(x * f + k * 31.7, z * f + k * 7.7) * 2 - 1); s += a * n * n; f *= 2.1; a *= 0.5; } return s / 0.97; }
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// Smooth edges between kinds of ground (every map uses these): mix two colours, and how far into
+// the zone from a to b a value is (0..1), with an edge that wobbles (no straight lines) and is
+// dithered in 2 m patches (so it looks natural and the ground still merges into big blocks).
+function mixc(a, b, t) {
+  if (t <= 0) return a;
+  if (t >= 1) return b;
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  return (Math.round(ar + (((b >> 16) & 255) - ar) * t) << 16) | (Math.round(ag + (((b >> 8) & 255) - ag) * t) << 8) | Math.round(ab + ((b & 255) - ab) * t);
+}
+function zone(v, a, b, x, z) {
+  const n = (vnoise(x * 0.05 + 3.1, z * 0.05 - 7.7) - 0.5) * Math.abs(b - a) * 0.9;
+  const t = sstep(a, b, v + n);
+  if (t <= 0 || t >= 1) return t;
+  return Math.min(1, Math.floor(t * 4 + h2(Math.floor(x / 2) * 7 + 3, Math.floor(z / 2) * 13 + 1)) / 4);
+}
 const WORLD_HALF = 360;
-const VOLCANO = [-215, 225], ACID = [-235, 40, 34], DESERT_X = 150, MEADOW = [0, 40];
+const VOLCANO = [-250, 214], ACID = [-235, 40, 34], DESERT_X = 150, MEADOW = [0, 40];
+const VRIM = 20, VCONE = 112, VPEAK = 100, VFLOOR = 79, VLAVA = 81.5; // the volcano: rim radius, foot radius, rim height, crater floor, lava lake
 const RIVER = [[-55, -122], [-50, -80], [-70, -10], [-56, 60], [-40, 140], [-58, 228], [-60, 320]];
 const DOWNTOWN = { x0: 46, x1: 156, z0: -70, z1: 8, y: 3 };
 const TOWNLOTS = [[66, -48, 24, 22, 'glass'], [100, -48, 22, 22, 'modern'], [134, -48, 22, 24, 'office'], [66, -14, 22, 22, 'deco'], [100, -14, 24, 24, 'glass'], [134, -14, 22, 22, 'brick']];
@@ -581,6 +599,24 @@ function riverDist(x, z) {
     if (d < best) { best = d; bx = ax + dx * t; }
   }
   return best;
+}
+// somewhere a big landmark stands (no trees there)
+function busyWorld(x, z) {
+  if (Math.hypot(x - CASTLE[0], z - CASTLE[1]) < 48 || Math.hypot(x - COLOSSEUM[0], z - COLOSSEUM[1]) < 46 || Math.hypot(x - PYRAMID[0], z - PYRAMID[1]) < 40) return true;
+  if (Math.hypot((x - TRACK[0]) / (TRACK[2] + 10), (z - TRACK[1]) / (TRACK[3] + 10)) < 1) return true;
+  if (x > DOWNTOWN.x0 - 16 && x < DOWNTOWN.x1 + 16 && z > DOWNTOWN.z0 - 16 && z < DOWNTOWN.z1 + 16) return true;
+  if (Math.abs(z + 106) < 7 && ((x > -202 && x < -74) || (x > -36 && x < 202))) return true; // the great wall
+  if (Math.hypot(x - LIGHT[0], z - LIGHT[1]) < 14) return true;
+  return false;
+}
+function volcanoHeight(x, z, dv, base) {
+  if (dv <= VRIM) return VFLOOR + (VPEAK - VFLOOR) * sstep(VRIM * 0.55, VRIM, dv);
+  const u = (dv - VRIM) / (VCONE - VRIM); // 0 at the rim, 1 at the foot
+  const a = Math.atan2(z - VOLCANO[1], x - VOLCANO[0]);
+  const g = Math.pow(Math.abs(Math.sin(a * 7 + 2.4 * vnoise(dv * 0.03 + 11, a * 2 + 5))), 3);
+  const cone = VPEAK * Math.pow(1 - u, 1.75) * (1 - 0.1 * g * sstep(0, 0.2, u)) + 2 * (vnoise(x * 0.08, z * 0.08) - 0.5) * sstep(0, 0.3, u);
+  // (sits on the land around its foot, so it rises out of it without a crease)
+  return cone + base * sstep(0.35, 1, u);
 }
 function inLot(x, z) { for (const [cx, cz, w, d] of TOWNLOTS) if (Math.abs(x - cx) < w / 2 + 0.01 && Math.abs(z - cz) < d / 2 + 0.01) return true; return false; }
 function worldHeight(x, z) {
@@ -598,9 +634,6 @@ function worldHeight(x, z) {
     const mesa = Math.max(0, fbm(x * 0.012 + 40, z * 0.012) - 0.55) * 90;
     h = h * (1 - mE) + mE * (2.5 + Math.floor(Math.min(28, mesa) / 4) * 4);
   }
-  // the volcano (with a crater at the top)
-  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
-  if (dv < 125) { const cone = 92 * Math.pow(1 - dv / 125, 1.35); h = Math.max(h, dv < 16 ? 74 : cone); }
   // the acid swamp in the west: a bowl
   const da = Math.hypot(x - ACID[0], z - ACID[1]);
   if (da < ACID[2] + 20) h = Math.min(h, -0.4 + Math.max(0, da - ACID[2] + 6) * 0.45 + 0.4 * Math.sin(x * 0.4 + z * 0.3)); // (above the sea level, so it holds acid, not sea water)
@@ -610,6 +643,10 @@ function worldHeight(x, z) {
   if (sea > 0) h = h * (1 - sea) + sea * -12;
   const dh = Math.hypot(x - 150, z - 262);
   if (dh < 40) h = Math.max(h, 22 * Math.pow(1 - dh / 40, 0.7) - 2);
+  // the volcano on the south-west coast (it rises out of the land and the sea alike): concave
+  // flanks with gullies running down them, and a deep crater with a lava lake at the top
+  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
+  if (dv < VCONE) h = Math.max(h, volcanoHeight(x, z, dv, h));
   // flat places for big things
   const flat = (cx, cz, r, edge, y) => { const d = Math.hypot(x - cx, z - cz); if (d < r + edge) { const k = sstep(r + edge, r, d); h = h * (1 - k) + y * k; } };
   flat(TRACK[0], TRACK[1], 54, 14, 2.5);
@@ -633,21 +670,35 @@ function worldHeight(x, z) {
   return h;
 }
 function worldColor(h, x, z) {
+  // man-made places keep sharp edges
   if (x > DOWNTOWN.x0 - 2 && x < DOWNTOWN.x1 + 2 && z > DOWNTOWN.z0 - 2 && z < DOWNTOWN.z1 + 2) return inLot(x, z) ? 0x8a8a84 : ((Math.floor(x / 2) + Math.floor(z / 2)) & 1 ? 0x3a3d42 : 0x34373c);
   const te = Math.hypot((x - TRACK[0]) / TRACK[2], (z - TRACK[1]) / TRACK[3]);
   if (te > 0.8 && te < 1.0) return te < 0.815 || te > 0.985 ? ((Math.floor(Math.atan2(z - TRACK[1], x - TRACK[0]) * 12) & 1) ? 0xd62828 : 0xf2f2f2) : 0x3a3d42;
-  if (riverDist(x, z) < 9 && h < 3) return 0xc9b27a;
+  // nature blends from one kind of ground into the next
+  let c = mixc(0x5fae4a, 0x6e9f45, zone(h, 10, 18, x, z));                    // grass, lusher up high
+  c = mixc(c, 0x4f8f3e, zone(-x, 130, 172, x, z));                             // forest floor (west)
+  const desert = mixc(0xe2b97a, [0xc8743e, 0xd88a4f, 0xb5622f][Math.floor(Math.max(0, h) / 4) % 3], zone(h, 5, 7.5, x, z));
+  const snowF = zone(x, DESERT_X - 25, DESERT_X + 15, x, z) * zone(-z, 42, 78, x, z);
+  c = mixc(c, desert, zone(x, DESERT_X - 38, DESERT_X + 4, x, z) * (1 - snowF)); // desert + mesas (east)
+  c = mixc(c, 0xeef3f6, snowF);                                                 // snowfield (north-east)
+  c = mixc(c, ((Math.floor(h) % 6) < 3) ? 0x7d8288 : 0x868b91, zone(h, 35, 47, x, z)); // mountain rock
+  c = mixc(c, 0xf2f6f9, zone(h, 64, 77, x, z));                                // snowy peaks
+  c = mixc(c, 0xc9b27a, zone(-riverDist(x, z), -13, -7, x, z) * zone(-h, -4.5, -2.5, x, z)); // river banks
+  c = mixc(c, 0xe2cf95, zone(-h, -2.8, -0.8, x, z) * zone(z, 132, 168, x, z)); // beach
+  c = mixc(c, 0xc9b27a, zone(-h, 0.4, 1.8, x, z));                             // sea floor
+  const da = Math.hypot(x - ACID[0], z - ACID[1]);
+  if (da < ACID[2] + 40) c = mixc(c, h < -1 ? 0x4a5a2a : 0x5b6b3a, zone(-da, -(ACID[2] + 34), -(ACID[2] + 12), x, z)); // swamp
   const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
-  if (dv < 125 && h > 4) return h > 70 ? 0x2e2b29 : 0x3d3a38;                 // volcano rock and ash
-  if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) return h < -1 ? 0x4a5a2a : 0x5b6b3a; // swamp
-  if (h < 1.2 && z > 150) return 0xe2cf95;                                     // beach
-  if (h < -1) return 0xc9b27a;                                                 // sea floor
-  if (h > 72) return 0xf2f6f9;                                                 // snowy peaks
-  if (h > 42) return ((Math.floor(h) % 6) < 3) ? 0x7d8288 : 0x868b91;          // mountain rock
-  if (x > DESERT_X && z < -60) return 0xeef3f6;                                // snowfield (north-east)
-  if (x > DESERT_X - 10) return h > 6 ? [0xc8743e, 0xd88a4f, 0xb5622f][Math.floor(h / 4) % 3] : 0xe2b97a; // desert + mesas
-  if (x < -150) return 0x4f8f3e;                                               // forest floor
-  return h > 14 ? 0x6e9f45 : 0x5fae4a;                                         // grass
+  if (dv < VCONE + 14) c = mixc(c, volcanoColor(h, x, z, dv), zone(-dv, -(VCONE + 10), -(VCONE - 32), x, z));
+  return c;
+}
+function volcanoColor(h, x, z, dv) {
+  if (dv < VRIM) return h < VFLOOR + 4 ? 0x4a2a20 : 0x2e2826;            // the crater: scorched red near the lava
+  const a = Math.atan2(z - VOLCANO[1], x - VOLCANO[0]);
+  const g = Math.abs(Math.sin(a * 7 + 2.4 * vnoise(dv * 0.03 + 11, a * 2 + 5))); // (the same gullies as its shape)
+  if (g > 0.93) return 0x5c5650;                                           // grey ash in the gullies
+  if (vnoise(x * 0.04 + 5, z * 0.04) > 0.68) return 0x55352a;               // rusty streaks
+  return h > 70 ? 0x2f2b29 : 0x3d3936;                                     // dark basalt, darker near the top
 }
 function buildWorld() {
   srand(101);
@@ -657,11 +708,11 @@ function buildWorld() {
     W: WORLD_HALF * 2, es: 3, bedrock: -40, height: worldHeight, color: worldColor, stream: true, near: 135, spawn: [MEADOW[0], 0, MEADOW[1]],
     caves: (stamp, fill) => {
       // the big mountain north of the meadow: a cave mouth, a long tunnel, a huge crystal cavern
-      tunnel(stamp, [[0, gh(0, -175) + 2, -175, 3.8], [0, 20, -195, 4], [-6, 26, -220, 4.4], [-4, 30, -245, 5]]);
-      for (const [x, y, z, r] of [[0, 34, -265, 18], [12, 30, -278, 12], [-14, 38, -258, 11]]) stamp(x, y, z, r);
-      fill(-6, -268, 2, 10, 60); fill(8, -262, 1.8, 10, 60);
+      tunnel(stamp, [[0, gh(0, -175) + 2, -175, 3.8], [0, 20, -195, 4], [-6, 22, -220, 4.4], [-4, 22, -245, 5]]);
+      for (const [x, y, z, r] of [[0, 24, -265, 17], [12, 21, -278, 11], [-14, 27, -258, 10]]) stamp(x, y, z, r);
+      fill(-6, -268, 2, 6, 44); fill(8, -262, 1.8, 6, 44);
       // a sealed crystal vault deeper in (dig to it)
-      stamp(0, 44, -305, 6);
+      stamp(0, 30, -305, 5.5);
       // the pirates' sea cave in the headland
       tunnel(stamp, [[150, -0.5, 300, 3.5], [150, 0.5, 282, 3.5], [148, 1.5, 266, 4], [146, 2.5, 256, 5]]);
       // the desert bunker: a shaft and a room
@@ -672,14 +723,15 @@ function buildWorld() {
   water1(-1, 1100);
   // pools: the acid swamp and the volcano's lava
   addPool('acid', ACID[0], ACID[1], ACID[2] + 4, 1.2, mapGroup);
-  addPool('lava', VOLCANO[0], VOLCANO[1], 15.5, 74.6, mapGroup);
+  addPool('lava', VOLCANO[0], VOLCANO[1], 16, VLAVA, mapGroup);
+  initVolcano({ x: VOLCANO[0], z: VOLCANO[1], level: VLAVA, craterR: 14, coneR: VCONE, ground: (x, z) => (G.groundAt ? G.groundAt(x, z) : worldHeight(x, z)) });
   const F = (x, y, z) => (G.floorAt ? G.floorAt(x, y, z) : y);
   // ---- forests (instanced)
   const trees = [], pines = [], dead = [];
   for (let i = 0; i < 2600 && trees.length < 900; i++) {
     const x = rr(-340, 340), z = rr(-340, 220), y = gh(x, z);
     if (y < 1 || y > 42) continue;
-    if (Math.hypot(x - MEADOW[0], z - MEADOW[1]) < 60 || Math.hypot(x - VOLCANO[0], z - VOLCANO[1]) < 125) continue;
+    if (Math.hypot(x - MEADOW[0], z - MEADOW[1]) < 60 || Math.hypot(x - VOLCANO[0], z - VOLCANO[1]) < VCONE + 8 || busyWorld(x, z)) continue;
     if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) { if (dead.length < 40) dead.push([x, y - 0.2, z, rr(0.8, 1.3)]); continue; }
     if (x > DESERT_X - 10 && z > -60) continue;                 // desert: no trees
     const dense = x < -150 ? 1 : 0.28;
@@ -690,8 +742,8 @@ function buildWorld() {
   forest(dead, [0x4a3b2a]);
   for (let i = 0; i < 70; i++) { const x = rr(-340, 340), z = rr(-340, 260), y = gh(x, z); if (y > 0) rock(x, y, z, rr(0.8, 2.6)); }
   // ---- crystals in the mountain cavern and the vault
-  for (let i = 0; i < 18; i++) { const a = rr(0, 6.28), r = rr(0, 15); crystals(Math.cos(a) * r, 30, -265 + Math.sin(a) * r, rr(0.9, 2.2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
-  crystals(0, 42, -305, 2.4, 0xffd86b);
+  for (let i = 0; i < 18; i++) { const a = rr(0, 6.28), r = rr(0, 14); crystals(Math.cos(a) * r, 18, -265 + Math.sin(a) * r, rr(0.9, 2.2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
+  crystals(0, 29, -305, 2.4, 0xffd86b);
   // ---- the sky island above the meadow, and the hidden launch pad in the forest that gets you there
   const SI = [-40, -10], SY = gh(SI[0], SI[1]) + 78;
   sbox(22, 2, 22, SI[0], SY, SI[1], 0x5fae4a, 'grass', null, 4);
@@ -796,7 +848,7 @@ function buildCaves() {
   srand(77);
   makeTerrain({
     W: 220, es: 3, bedrock: -40, height: cavesHeight,
-    color: (h) => (h > 30 ? 0x4f7a3a : h > 3 ? 0x6e7076 : 0x5fae4a),
+    color: (h, x, z) => mixc(mixc(0x5fae4a, 0x6e7076, zone(h, 1.5, 5, x, z)), 0x4f7a3a, zone(h, 27, 33, x, z)),
     // rock in bands of colour, deeper = darker
     under: (d, topc) => (d <= 0 ? topc : d <= 2 ? 0x5a5550 : [0x6d6f76, 0x63666e, 0x77716a, 0x5d6068][Math.floor(d / 12) % 4]),
     caves: (stamp, fill) => {
@@ -884,7 +936,7 @@ function buildDesert() {
   srand(53);
   makeTerrain({
     W: 240, es: 3, height: desertHeight, bedrock: -8,
-    color: (h) => (h < -1.5 ? 0xb89d6a : h < 4 ? 0xe2b97a : [0xc8743e, 0xd88a4f, 0xb5622f, 0xe0a067][Math.floor(h / 2.5) & 3]),
+    color: (h, x, z) => mixc(mixc(0xb89d6a, 0xe2b97a, zone(h, -2.2, -0.8, x, z)), [0xc8743e, 0xd88a4f, 0xb5622f, 0xe0a067][Math.floor(Math.max(0, h) / 2.5) & 3], zone(h, 3, 5.5, x, z)),
   });
   water1(-2.5);
   const gh = groundHeight;
@@ -916,7 +968,7 @@ function snowHeight(x, z) {
 }
 function buildSnow() {
   srand(61);
-  makeTerrain({ W: 240, es: 3, height: snowHeight, bedrock: -9, color: (h) => (h < 3 ? 0xdfe9f0 : h < 18 ? 0xf2f6f9 : 0x9aa3ad) });
+  makeTerrain({ W: 240, es: 3, height: snowHeight, bedrock: -9, color: (h, x, z) => mixc(mixc(0xdfe9f0, 0xf2f6f9, zone(h, 1.5, 4.5, x, z)), 0x9aa3ad, zone(h, 15.5, 21, x, z)) });
   snowyTrees = true;
   // frozen lake: slippery ice sheet
   const ice = new THREE.Mesh(new THREE.CylinderGeometry(26, 26, 0.4, 24), new THREE.MeshStandardMaterial({ color: 0xa9e3ff, transparent: true, opacity: 0.85, roughness: 0.1, flatShading: true }));
@@ -1030,18 +1082,20 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); clearPools(); G.groundAt = null;
+  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); clearPools(); clearVolcano(); G.groundAt = null;
+  if (G.resetVehicle) G.resetVehicle();
+  G.lastBoom.time = -99; G.lastShot = null; // (people forget the old map's explosions)
   if (G.clearNukes) G.clearNukes();
   G.mapId = m.id;
   G.map = m;
   G.killY = Math.min(m.killY, DIG_DEPTH - 25); // below the deepest hole you can dig
   G.walkBound = m.walk;
   G.waterY = m.water;
-  G.waterAt = () => -Infinity;
   skyDome(m.sky[0], m.sky[1]);
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
   G.mapBuilding = true; G.mapNid = 0; G.entByNid = new Map(); G.trees = []; G.spinners = []; G.waterfall = null; G.lazyBuildings = false;
   m.build();
+  poolsReady();
   if (m.id !== 'sky') makeClouds(18, 70, 300);
   applyTime(G.settings ? G.settings.time : 'day');
   G.mapBuilding = false;
@@ -1112,6 +1166,7 @@ export function updateMap(dt) {
   updateTerrain();
   updateCubes(dt);
   updatePools(dt);
+  updateVolcano(dt);
   if (G.spinners) for (const sp of G.spinners) sp.obj.rotation.z += sp.speed * dt;
   if (G.waterfall && G.camera && G.camera.position.distanceTo(new THREE.Vector3(G.waterfall.x, G.camera.position.y, G.waterfall.z)) < 110 && Math.random() < 0.7) {
     const w = G.waterfall;

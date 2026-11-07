@@ -22,6 +22,9 @@ const SHIRTS = [0xe63946, 0x2a9d8f, 0xf4a261, 0x457b9d, 0x8338ec, 0xffbe0b, 0x06
 const PANTS = [0x264653, 0x1d3557, 0x3d405b, 0x6b705c, 0x22223b, 0x495057];
 const SKINS = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac, 0xf6d0b1];
 const pick = (a) => a[(Math.random() * a.length) | 0];
+// The real random numbers, for what people say: speech only happens near the camera, so it must
+// not use up a room's shared (seeded) random numbers on some computers and not others.
+const rnd = Math.random;
 
 // part layout for a 1.0 scale person, feet at y=0
 const P = {
@@ -76,6 +79,13 @@ export function buildHumanoid(s, colors) {
   belt.position.y = -0.33 * s; meshes.torso.add(belt);
   if (colors.hat && colors.hat !== 'none') addHat(meshes.head, colors.hat, colors.hatColor ?? 0xe63946, s);
   return meshes;
+}
+// free what buildHumanoid made for one person (the body part shapes are shared and stay)
+export function disposeHumanoid(meshes) {
+  const shared = new Set(Object.values(geos)), geo = new Set(), mat = new Set();
+  for (const k in meshes) meshes[k].traverse((o) => { if (o.isMesh) { if (!shared.has(o.geometry)) geo.add(o.geometry); mat.add(o.material); } });
+  for (const g of geo) g.dispose();
+  for (const m of mat) m.dispose();
 }
 
 // hats (profile look): cap, beanie, top hat, crown, helmet
@@ -157,7 +167,13 @@ const LINES = {
   fire: ['HOT HOT HOT!', 'I\'M ON FIRE!', 'WATER!'],
   scared: ['Don\'t shoot!', 'Please no!', 'Hands up!'],
 };
-const pickLine = (a) => a[(Math.random() * a.length) | 0];
+const pickLine = (a) => a[(rnd() * a.length) | 0];
+// where whoever hurt someone is now: you ('me'), or another player in a room (null: gone)
+function culpritPos(by) {
+  if (by === 'me') return G.player ? G.player.pos() : null;
+  const p = by && G.net && G.net.players.get(by);
+  return p ? p.pos.clone() : null;
+}
 export function updateBubbles(dt) {
   for (let i = bubbles.length - 1; i >= 0; i--) {
     const b = bubbles[i];
@@ -200,7 +216,7 @@ export class Dummy {
     this.home = pos.clone();
     // everyone's a bit different
     this.traits = { brave: Math.random(), curious: Math.random(), friendly: Math.random(), dancer: Math.random() < 0.3, chatty: Math.random() };
-    this.angryAt = -99; this.scaredAt = -99;
+    this.angryAt = -99; this.scaredAt = -99; this.blame = null; // (blame: who hurt me, see hurt())
     this.state = null;
     this.frozen = 0;
     this.downTime = 0;
@@ -215,9 +231,9 @@ export class Dummy {
     }
   }
 
-  // say something (only if you're close enough to read it, and not too often)
+  // say something (only if you're close enough to read it, and not too often; the dead don't talk)
   say(kind, force = false) {
-    if (this.dead || !G.camera || this.cfg.ai === 'zombie' && kind !== 'zombie') return;
+    if (this.dead || this.deadT > 0 || !G.camera || this.cfg.ai === 'zombie' && kind !== 'zombie') return;
     if (!force && G.time - (this.lastSaid || -99) < 3.5) return;
     if (G.camera.position.distanceTo(this.center()) > 30) return;
     if (bubbles.length >= 6) { const old = bubbles.shift(); old.el.remove(); if (old.who.bubble === old) old.who.bubble = null; }
@@ -348,15 +364,15 @@ export class Dummy {
 
   // dmg = health damage; push = optional knock velocity (defaults from dmg + dir)
   hurt(dmg, dir, push) {
-    // was it you? (you're aiming this way, not too far off)
-    if (G.player && dmg > 2) {
-      const pp = G.player.pos(), c = this.center();
-      const to = c.clone().sub(pp), d = to.length();
-      if (d < 70 && G.aim && G.aim.dir.dot(to.normalize()) > 0.82) {
-        if (this.traits.brave > 0.62 && this.hp - dmg > this.maxHp * 0.3) { this.angryAt = G.time; this.say('fight', true); }
-        else { this.scaredAt = G.time; this.say(Math.random() < 0.5 ? 'hurt' : 'flee', true); }
-      } else if (dmg > 8) this.say('hurt');
-    }
+    // who did it? Only a player's own action counts (G.actionBy: 'me' while you use a tool, a
+    // player's id while their action runs here), and only if they're not too far off
+    const by = G.actionBy;
+    const at = by && dmg > 2 && this.deadT <= 0 ? culpritPos(by) : null;
+    if (at && at.distanceTo(this.center()) < 70) {
+      this.blame = by;
+      if (this.traits.brave > 0.62 && this.hp - dmg > this.maxHp * 0.3) { this.angryAt = G.time; this.say('fight', true); }
+      else { this.scaredAt = G.time; this.say(rnd() < 0.5 ? 'hurt' : 'flee', true); }
+    } else if (dmg > 8) this.say('hurt');
     if (this.state === 'standing') this.knock(push || (dir ? dir.clone().multiplyScalar(Math.min(dmg * 0.15, 12)) : null));
     else { if (push) this.knock(push); if (dmg > 8) sfx.oof(this.center(), this.pitch); }
     this.damageHp(dmg);
@@ -445,7 +461,7 @@ export class Dummy {
     this.yaw = rand(0, Math.PI * 2);
     if (this.ai.group) this.endChat();
     this.ai.mode = 'idle'; this.ai.t = rand(0.5, 2); this.ai.goal = null;
-    if (Math.random() < 0.5) this.say('up');
+    if (rnd() < 0.5) this.say('up');
     sfx.pop(feet);
     FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.3, 0)), 4, 0xd9cfb8, 0.5);
   }
@@ -467,6 +483,8 @@ export class Dummy {
     if (this.ai.carry) this.dropCarry();
     this.freeSeat();
     this.revive();
+    // a fresh start: no grudges
+    this.angryAt = -99; this.scaredAt = -99; this.blame = null;
     const h = this.home;
     let feet = new THREE.Vector3(h.x + rand(-1.5, 1.5), h.y + 0.5, h.z + rand(-1.5, 1.5));
     const g = raycast(feet.clone().setY(h.y + 30), feet.clone().setY(h.y - 30), GROUP.STATIC);
@@ -613,8 +631,8 @@ export class Dummy {
     if (G.dangers) for (const dg of G.dangers) if (dg.until > G.time && dg.pos.distanceTo(feet) < dg.r) return { pos: dg.pos };
     // bullets flying nearby
     if (G.lastShot && G.time - G.lastShot.time < 1.5 && G.lastShot.pos.distanceTo(feet) < 9 + this.traits.brave * -5 + 5) return { pos: G.lastShot.pos };
-    // you hurt me: get away from you (unless I'm the brave sort)
-    if (G.time - this.scaredAt < 8 && G.player) return { pos: G.player.pos() };
+    // you (or another player) hurt me: get away from them (unless I'm the brave sort)
+    if (G.time - this.scaredAt < 8) { const at = culpritPos(this.blame); if (at) return { pos: at }; }
     if (G.firePatches) for (const f of G.firePatches) if (f.pos.distanceTo(feet) < f.r + 5) return { pos: f.pos };
     for (const h of G.blackholes) if (h.mesh && h.mesh.position.distanceTo(feet) < 22) return { pos: h.mesh.position };
     if (this.cfg.ai !== 'zombie') {
@@ -659,17 +677,20 @@ export class Dummy {
       else { this.updateSeated(dt); return; }
     }
 
-    if (kind !== 'zombie' && pp && G.time - this.angryAt < 9 && !threat) {
+    // who hurt me (you, or another player in a room), if I'm still angry and they're still here
+    const foe = kind !== 'zombie' && G.time - this.angryAt < 9 && !threat ? culpritPos(this.blame) : null;
+    if (foe) {
       // you hurt me and I'm not scared of you: here I come
-      const to = pp.clone().sub(feet).setY(0), d = to.length();
+      const to = foe.clone().sub(feet).setY(0), d = to.length();
       want.copy(to.normalize()); speed = this.cfg.speed * 2.1;
       pose.armsUp = d < 4;
       ai.shove = (ai.shove || 0) - dt;
-      if (d < 1.5 * s + 0.6 && ai.shove <= 0) {
+      // (close enough, and not a floor above or below me)
+      if (d < 1.5 * s + 0.6 && Math.abs(foe.y - b.position.y) < 1.5 * s && ai.shove <= 0) {
         ai.shove = 1.1;
-        G.player.fling(to.normalize().multiplyScalar(8).add(new THREE.Vector3(0, 4, 0)));
+        // (another player gets shoved on their own computer, where they are)
+        if (this.blame === 'me') { G.player.fling(to.normalize().multiplyScalar(8).add(new THREE.Vector3(0, 4, 0))); G.shake = Math.max(G.shake, 0.3); }
         sfx.whack(feet); this.say('fight');
-        G.shake = Math.max(G.shake, 0.3);
       }
       if (d > 45) this.angryAt = -99;
     } else if (kind === 'zombie' && pp) {

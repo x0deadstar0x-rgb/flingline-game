@@ -127,7 +127,9 @@ function hookForce(g) {
   g.tension = clamp(over, 0, 1);
 }
 
-function release(sound = true) {
+// share: in a room, tell everyone where it is and how it's moving now (so a throw carries on
+// there too); anchoring says so itself, once it's pinned
+function release(sound = true, share = true) {
   const g = G.grab;
   if (!g) return;
   if (g.body) {
@@ -137,6 +139,7 @@ function release(sound = true) {
   G.grab = null;
   if (strand) strand.hide();
   if (sound) sfx.drop();
+  if (share && g.body && G.shareRelease) G.shareRelease(g.body.ent);
 }
 
 function tryGrab() {
@@ -289,14 +292,16 @@ export function unanchor(e) {
   if (e.anchorPin) { e.mesh.remove(e.anchorPin); e.anchorPin = null; }
 }
 G.unanchor = unanchor;
+G.anchorEnt = anchorEnt;
 function anchorHeld() {
   const g = G.grab;
   if (!g || g.hook) return;
   const e = g.body.ent;
   if (!e) return;
   const at = tv(g.body.pointToWorldFrame(g.local));
-  release(false);
+  release(false, false);
   if (anchorEnt(e, at)) { sfx.weld ? sfx.weld() : sfx.drop(); FX.sparks(at, new THREE.Vector3(0, 1, 0), 0x9fe8ff, 10, 3); toast('Anchored — grab it again to free it'); }
+  if (G.shareRelease) G.shareRelease(e); // (pinned there for everyone)
 }
 
 // A rope of fixed length L spanning d: perfectly straight when d >= L, otherwise it droops by

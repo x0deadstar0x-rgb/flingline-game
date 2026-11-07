@@ -432,9 +432,48 @@ export function createEnt(def, pos, opts = {}) {
   G.ents.add(ent);
   if (nid) { if (!G.entByNid) G.entByNid = new Map(); G.entByNid.set(nid, ent); }
   if (opts.sleep) body.sleep();
+  if (def.id === 'c4') armC4(ent);
   syncEnt(ent);
   enforceLimit();
   return ent;
+}
+
+// ---- sticky things: the first thing they touch, they stick to (people, objects, walls, ground)
+export function stickOnHit(e, onStick) {
+  e.body.addEventListener('collide', (ev) => {
+    if (e.stuck || e.dead || ev.body.isPlayer) return;
+    e.stuck = true;
+    const other = ev.body;
+    afterStep(() => {
+      if (e.dead) return;
+      const oe = other.ent;
+      const d = oe && (oe.kind === 'dummybody' || oe.kind === 'ragpart') ? oe.dummy : null;
+      if (d && d.parts && d.parts.torso) { if (d.state === 'standing') d.knock(null); addWeld(e.body, d.parts.torso.body); }
+      else if (other.type === CANNON.Body.DYNAMIC) addWeld(e.body, other);
+      else { e.body.type = CANNON.Body.STATIC; e.body.mass = 0; e.body.updateMassProperties(); e.body.velocity.setZero(); e.body.angularVelocity.setZero(); }
+      if (onStick) onStick(other);
+    });
+  });
+}
+// ---- C4: sticks where it lands, blinks, and waits for its owner's detonate key
+const ledGeo = new THREE.SphereGeometry(0.04, 6, 4);
+const ledOn = new THREE.MeshBasicMaterial({ color: 0xff2a2a }), ledOff = new THREE.MeshBasicMaterial({ color: 0x401010 });
+function armC4(e) {
+  e.owner = G.netRemote ? (G.netFrom || 'remote') : 'me';
+  const led = new THREE.Mesh(ledGeo, ledOn);
+  led.position.set(0.17, 0.11, 0.1);
+  e.mesh.add(led);
+  stickOnHit(e, () => sfx.beep(e.body.position));
+  e.update = function () { led.material = (G.time * 1.6 + this.id * 0.37) % 1 < 0.2 ? ledOn : ledOff; };
+}
+// sets off every charge `owner` planted, one after another very quickly. Returns how many.
+export function detonateC4(owner = 'me') {
+  const list = [];
+  for (const e of G.ents) if (!e.dead && e.def && e.def.id === 'c4' && (e.owner || 'me') === owner && !e.detonating) list.push(e);
+  list.sort((a, b) => a.born - b.born);
+  list.forEach((e, i) => detonate(e, 0.05 + i * 0.07));
+  if (list.length) sfx.beep();
+  return list.length;
 }
 
 export function syncEnt(e) {
@@ -742,6 +781,7 @@ export function explode(pos, power = 1, opts = {}) {
   if (opts.fire) for (let i = 0; i < 18; i++) FX.particle({ pos, vel: new THREE.Vector3(rand(-8, 8), rand(5, 14), rand(-8, 8)), color: 0xff7a1a, size: 0.3, life: rand(1.5, 2.5), glow: true, add: true, gravity: 14, drag: 0.2 });
   if (pos.y < G.waterAt(pos.x, pos.z) + 1.5) FX.splash(pos, 30, 1.6);
   if (G.crater && !opts.quiet && !opts.noCrater) G.crater(pos, power, opts);
+  if (G.volcanoBlast) G.volcanoBlast(pos, power);
   // buildings lose blocks too (glass from further away)
   if (G.blastBuildings && !opts.quiet) G.blastBuildings(pos, (opts.craterRadius ?? 1.9 * Math.pow(power, 0.55)) * 1.15);
   sfx.explosion(Math.min(1.5, power), pos);
@@ -915,9 +955,12 @@ export function physicsForces() {
     const depth = G.waterAt(b.position.x, b.position.z) - b.position.y;
     if (depth > -0.3) {
       const sub = clamp((depth + 0.3) / 0.8, 0, 1);
-      const buoy = e.kind === 'ragpart' ? e.dummy.buoy : (e.frozen ? 1.4 : e.mat.buoy);
-      b.applyForce(new CANNON.Vec3(-b.position.x * 0.02 * b.mass, b.mass * g * buoy * sub, -b.position.z * 0.02 * b.mass));
-      b.velocity.scale(1 - 0.02 * sub, b.velocity);
+      // (lava is thick and heavy: most things float on it, and slowly)
+      const dens = G.liquidDensity ? G.liquidDensity(b.position.x, b.position.z) : 1;
+      const buoy = (e.kind === 'ragpart' ? e.dummy.buoy : (e.frozen ? 1.4 : e.mat.buoy)) * dens;
+      const drift = dens > 1.5 ? 0 : 0.02;
+      b.applyForce(new CANNON.Vec3(-b.position.x * drift * b.mass, b.mass * g * buoy * sub, -b.position.z * drift * b.mass));
+      b.velocity.scale(1 - (dens > 1.5 ? 0.08 : 0.02) * sub, b.velocity);
       b.angularVelocity.scale(1 - 0.02 * sub, b.angularVelocity);
     }
     const rope = e.def && e.def.special === 'balloon' && e.lift > 30 ? ropeOf.get(b) : null;
@@ -971,7 +1014,7 @@ export function updateEnts(dt) {
       continue;
     }
     // safety net: something that slipped into the ground is put back on top
-    if (b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC && G.solidAt && G.solidAt(b.position.x, b.position.y + 0.6, b.position.z) && b.position.y > (G.killY ?? -100) + 5) {
+    if (b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC && G.solidAt && G.solidAt(b.position.x, b.position.y, b.position.z) && G.solidAt(b.position.x, b.position.y + 0.6, b.position.z) && b.position.y > (G.killY ?? -100) + 5) {
       b.position.y = G.floorAt(b.position.x, b.position.y + 0.6, b.position.z) + 0.6;
       if (b.velocity.y < 0) b.velocity.y *= -0.2;
     }
@@ -1215,7 +1258,7 @@ export function checkBig(kind, pos, yaw) {
     const h = raycastStatic(new THREE.Vector3(w.x, pos.y + 25, w.z), new THREE.Vector3(w.x, pos.y - 60, w.z));
     if (!h || h.point.y < G.waterAt(w.x, w.z)) { miss++; continue; }
     lo = Math.min(lo, h.point.y);
-    if (h.point.y > hi) { hi = h.point.y; hiProp = !h.body.shapes.some((sh) => sh instanceof CANNON.Heightfield); }
+    if (h.point.y > hi) { hi = h.point.y; hiProp = !h.body.isTerrain; }
   }
   const res = { ok: true, reason: '', y: hi > -1e8 ? hi : pos.y, corners };
   for (const c of corners) c.y = res.y + 0.06;
@@ -1225,7 +1268,7 @@ export function checkBig(kind, pos, yaw) {
   const base = new THREE.Vector3(pos.x, res.y, pos.z);
   const boxes = planBig(kind, base, yaw).map((b) => ({ x: b.w.x, y: b.w.y, z: b.w.z, r: b.half * 0.9, hy: b.hy * 0.9 }));
   for (const body of G.world.bodies) {
-    const big = body.type !== CANNON.Body.DYNAMIC ? !body.shapes.some((sh) => sh instanceof CANNON.Heightfield) : body.mass > 250; // heavy things (incl. blocks of another big build)
+    const big = body.type !== CANNON.Body.DYNAMIC ? !body.isTerrain : body.mass > 250; // heavy things (incl. blocks of another big build)
     if (!big || body.isPlayer) continue;
     if (body.aabbNeedsUpdate) body.updateAABB();
     const a = body.aabb;

@@ -1,9 +1,10 @@
 // Things that go boom.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, rand, popup, later, afterStep, tv, toast } from '../core.js';
-import { spawnItem, createEnt, explode, detonate, addWeld, launchFireworks, addFirePatch, ITEMS, removeEnt } from '../items.js';
-import { carveTerrain, spawnCube } from '../terrain.js';
+import { G, rand, popup, later, afterStep, tv, toast, clamp } from '../core.js';
+import { spawnItem, createEnt, explode, detonate, addWeld, launchFireworks, addFirePatch, ITEMS, removeEnt, detonateC4 } from '../items.js';
+import { bindText } from '../input.js';
+import { carveTerrain, spawnCube, groundTop, groundBottom } from '../terrain.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
 import { dropNuke } from '../nuke.js';
@@ -60,7 +61,7 @@ function makeSuperHole(pos) {
   G.scene.add(g);
   sfx.blackhole(pos); sfx.blackhole(pos);
   // it stays open until you click again with the tool (or load another map), growing all the time
-  const h = { pos: pos.clone(), t: 0, life: Infinity, mesh: g, ring: rings[0], ring2: rings[2], rings, disk, superHole: true, eatT: 0, size: 1.2, lastR: 0 };
+  const h = { pos: pos.clone(), t: 0, life: Infinity, mesh: g, ring: rings[0], ring2: rings[2], rings, disk, superHole: true, size: 1.2, eaten: 0, food: 0, eatR: 2, reach: 60, shown: 0, slice: 0, S: 1, passR: 2, inner: 0, farT: 0 };
   G.blackholes.push(h);
   G.cubeSinks = G.cubeSinks || [];
   h.sink = { pos: h.pos, r: 45, core: 1.5, pull: 90 };
@@ -71,22 +72,36 @@ const _f = new CANNON.Vec3();
 function bhForce() {
   for (const h of G.blackholes) {
     const grow = Math.min(1, h.t / 0.6);
-    const R = h.superHole ? 60 + 40 * Math.min(1, h.t / 60) : 26, P = h.superHole ? 150 : 75;
+    const sup = !!h.superHole;
+    const R = sup ? h.reach : 26, P = sup ? 150 + h.size * 4 : 75;
+    const eatD = sup ? h.size * 1.15 + 1.5 : 0;
+    const vmax = sup ? 45 + h.size * 2 : 30;
     for (const b of G.world.bodies) {
       if (b.type !== CANNON.Body.DYNAMIC) continue;
       const dx = h.pos.x - b.position.x, dy = h.pos.y - b.position.y, dz = h.pos.z - b.position.z;
       const d = Math.hypot(dx, dy, dz);
       if (d > R || d < 0.01) continue;
       // gets there: eaten (removed after the physics step)
-      if (h.superHole && d < h.size * 0.9 && !b._eaten) { b._eaten = true; afterStep(() => eatBody(h, b)); continue; }
+      if (sup && d < eatD && !b._eaten) { b._eaten = true; afterStep(() => eatBody(h, b)); continue; }
       let a = (P * (1 - d / R) + 12) * grow;
-      if (b.isPlayer) a *= h.superHole ? 0.45 : 0.35;
+      if (sup) a *= 1 + 2.5 * clamp(1 - d / (h.size * 8 + 10), 0, 1); // much stronger close in
+      if (b.isPlayer) a *= sup ? 0.45 : 0.35;
       const inv = 1 / d;
-      // pull + swirl
-      _f.set((dx * inv + -dz * inv * 0.5) * a * b.mass, (dy * inv) * a * b.mass + 9.82 * b.mass * 0.5 * grow, (dz * inv + dx * inv * 0.5) * a * b.mass);
+      // pull + swirl (the super hole's swirl fades out close in, so things spiral IN instead of
+      // circling it forever)
+      const sw = sup ? 0.5 * clamp((d - h.size * 3) / (R * 0.35), 0, 1) : 0.5;
+      _f.set((dx * inv - dz * inv * sw) * a * b.mass, (dy * inv) * a * b.mass + 9.82 * b.mass * 0.5 * grow, (dz * inv + dx * inv * sw) * a * b.mass);
       b.applyForce(_f);
-      if (d < 2 && !h.superHole) b.velocity.scale(0.9, b.velocity);
-      const sp = b.velocity.length(), vmax = h.superHole ? 45 : 30;
+      if (d < 2 && !sup) b.velocity.scale(0.9, b.velocity);
+      if (sup) {
+        // its sideways (orbiting) speed is dragged away, more and more the closer it gets
+        const vr = (b.velocity.x * dx + b.velocity.y * dy + b.velocity.z * dz) * inv;
+        const k = 0.015 + 0.12 * clamp(1 - d / (h.size * 10 + 20), 0, 1);
+        b.velocity.x -= (b.velocity.x - dx * inv * vr) * k;
+        b.velocity.y -= (b.velocity.y - dy * inv * vr) * k;
+        b.velocity.z -= (b.velocity.z - dz * inv * vr) * k;
+      }
+      const sp = b.velocity.length();
       if (sp > vmax) b.velocity.scale(vmax / sp, b.velocity);
       b.wakeUp();
     }
@@ -95,6 +110,8 @@ function bhForce() {
 G.extraForces.push(bhForce);
 function eatBody(h, b) {
   b._eaten = false;
+  const ate = 20 + Math.min(600, (b.mass || 10) / 4) + (b.isPiece && b.piece ? b.piece.n * 0.5 : 0);
+  h.eaten += ate; h.food += ate;
   FX.particle({ pos: tv(b.position), vel: new THREE.Vector3(), color: 0xc77dff, size: 0.8, life: 0.3, glow: true, add: true, gravity: 0, drag: 0, grow: -0.9, floor: false });
   if (b.isPlayer) {
     G.player.respawn();
@@ -141,41 +158,64 @@ export function updateBlackHoles(dt) {
   }
 }
 
+// NO LIMIT: it grows as long as it finds something to eat, until there's nothing left on the
+// whole map. The bigger it gets, the more it needs to keep growing (what it ate in the last couple
+// of seconds against what something its size needs), but the stronger it gets too: it reaches
+// further, grows faster and tears the ground away in bigger and bigger chunks.
 function updateSuperHole(h, dt) {
   const t = h.t;
-  h.size = 1.2 + 3.6 * Math.min(1, t / 6) + 3.2 * Math.min(1, Math.max(0, t - 6) / 54); // the black core
-  const eatR = 2 + 9 * Math.min(1, t / 8) + 17 * Math.min(1, Math.max(0, t - 8) / 52); // how far it has eaten into the ground
+  h.food *= Math.exp(-dt / 2);
+  const need = 30 + 0.08 * h.eatR * h.eatR;
+  const fed = t < 5 ? 1 : clamp(h.food / need, 0, 1);
+  if (t < h.life - 0.6) h.eatR += dt * (t < 5 ? 2 : (0.5 + 0.03 * h.eatR) * fed);
+  const eatR = h.eatR;
+  h.size = eatR / 2.4;                              // the black core
+  h.reach = eatR * 2.3 + 30;                        // how far away it pulls things in
   h.sink.core = h.size;
-  h.sink.r = 45 + 35 * Math.min(1, t / 60);
+  h.sink.r = Math.max(45, eatR * 1.9);
+  // a milestone every time it grows by half again
+  if (h.size > (h.shown || 4) * 1.5) { h.shown = h.size; popup(`BLACK HOLE: ${Math.round(eatR * 2)} m WIDE`, h.pos.clone().add(new THREE.Vector3(0, h.size + 3, 0)), '#c77dff', 26); G.shake = Math.max(G.shake, 0.6); sfx.blackhole(h.pos); }
   const fade = t > h.life - 0.6 ? Math.max(0.05, (h.life - t) / 0.6) : 1;
   h.mesh.scale.setScalar(h.size * fade * (1 + Math.sin(t * 13) * 0.03));
   h.disk.rotation.y += dt * 2.5;
   h.rings.forEach((r, i) => { r.rotation.z += dt * (5 - i) * (i % 2 ? -1 : 1); });
-  // swirling streaks
+  // swirling streaks (a wider swirl as it grows)
+  const sw = Math.max(1, h.size / 4.5);
   for (let j = 0; j < 6; j++) {
-    const a = rand(0, Math.PI * 2), r = rand(8, 22);
-    const p = h.pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rand(-4, 4), Math.sin(a) * r));
-    FX.particle({ pos: p, vel: h.pos.clone().sub(p).multiplyScalar(1.6).add(new THREE.Vector3(-Math.sin(a) * 12, 0, Math.cos(a) * 12)), color: [0xc77dff, 0xff9e4a, 0x5a189a][j % 3], size: 0.22, life: 0.55, glow: true, add: true, gravity: 0, drag: 0, floor: false });
+    const a = rand(0, Math.PI * 2), r = rand(8, 22) * sw;
+    const p = h.pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rand(-4, 4) * sw, Math.sin(a) * r));
+    FX.particle({ pos: p, vel: h.pos.clone().sub(p).multiplyScalar(1.6).add(new THREE.Vector3(-Math.sin(a) * 12 * sw, 0, Math.cos(a) * 12 * sw)), color: [0xc77dff, 0xff9e4a, 0x5a189a][j % 3], size: 0.22 * Math.sqrt(sw), life: 0.55, glow: true, add: true, gravity: 0, drag: 0, floor: false });
   }
-  // it eats the ground and the buildings around it, bite by bite; the bits fly in
-  h.eatT -= dt;
-  if (h.eatT <= 0 && t < h.life - 0.5) {
-    h.eatT = 0.25;
-    // (every few bites the whole ball again, in case new things fell in; otherwise the new part)
-    const res = carveTerrain(h.pos, eatR, { sphere: true });
-    h.lastR = eatR;
-    if (res && res.removed) {
-      const cols = res.sample.length ? res.sample : [0x6b4f35, 0x7d7f86];
-      for (let q = 0; q < Math.min(22, 4 + (res.removed >> 4)); q++) {
-        const dir = new THREE.Vector3(rand(-1, 1), rand(-1, 0.4), rand(-1, 1)).normalize();
-        spawnCube(h.pos.clone().addScaledVector(dir, eatR * rand(0.8, 1.1)), dir.multiplyScalar(-rand(2, 6)), cols[(Math.random() * cols.length) | 0], 0.45, 4);
-      }
+  if (t >= h.life - 0.5) return;
+  // Eating: the ground (and the buildings) inside its ball. A big ball is eaten a slice of rows
+  // each frame (all of it every few frames), skipping the middle where everything is long gone.
+  const S = eatR < 25 ? 1 : eatR < 80 ? 4 : eatR < 200 ? 8 : 12;
+  if (S !== h.S) { h.S = S; h.slice = 0; h.passR = eatR; }
+  const res = carveTerrain(h.pos, eatR, { sphere: true, slice: S > 1 ? [h.slice, S] : null, inner: h.inner });
+  if (res && res.removed) {
+    h.eaten += res.removed; h.food += res.removed;
+    // the ground comes away in chunks that fly in (bigger chunks as it grows)
+    const cols = res.sample.length ? res.sample : [0x6b4f35, 0x7d7f86];
+    const cs = clamp(0.45 * (1 + eatR / 12), 0.45, 4);
+    for (let q = 0; q < Math.min(S > 1 ? 6 : 3, 1 + (res.removed >> 7)); q++) {
+      const dir = new THREE.Vector3(rand(-1, 1), rand(-1, 0.4), rand(-1, 1)).normalize();
+      spawnCube(h.pos.clone().addScaledVector(dir, eatR * rand(0.85, 1.05)), dir.multiplyScalar(-rand(3, 8) * Math.sqrt(sw)), cols[(Math.random() * cols.length) | 0], cs * rand(0.6, 1.2), 4);
     }
-    if (G.blastBuildings) G.blastBuildings(h.pos, eatR * 0.9, { quiet: true, scorch: false });
+  }
+  if (++h.slice >= S) {
+    // a whole pass done: everything inside the ball it started with is gone from top to bottom
+    h.slice = 0;
+    const H = Math.max(h.pos.y - groundBottom(), groundTop() - h.pos.y) + 2;
+    h.inner = h.passR > H ? Math.sqrt(h.passR * h.passR - H * H) : 0;
+    h.passR = eatR;
+    if (G.blastBuildings) { const n = G.blastBuildings(h.pos, eatR * 0.9, { quiet: true, scorch: false }) || 0; h.eaten += n; h.food += n; }
+    // (the far-away view of a big map is redrawn now and then, so the hole shows from afar)
+    if (eatR > 60 && G.refreshFar && G.time - h.farT > 10) { h.farT = G.time; G.refreshFar(); }
   }
   // people nearby lose their footing; you get dragged
-  for (const d of G.dummies) if (d.state === 'standing' && d.center().distanceTo(h.pos) < 40) d.knock(null);
-  if (G.player && G.player.pos().distanceTo(h.pos) < 60) { G.player.stun = Math.max(G.player.stun, 0.3); G.shake = Math.max(G.shake, 0.25); }
+  const knockR = Math.max(40, eatR * 1.6);
+  for (const d of G.dummies) if (d.state === 'standing' && d.center().distanceTo(h.pos) < knockR) d.knock(null);
+  if (G.player && G.player.pos().distanceTo(h.pos) < h.reach) { G.player.stun = Math.max(G.player.stun, 0.3); G.shake = Math.max(G.shake, 0.25); }
 }
 
 export const boomTools = [
@@ -244,6 +284,24 @@ export const boomTools = [
     update(dt) { cool(this, dt); },
   },
   {
+    id: 'c4', name: 'C4 Charges', icon: '📟', color: 0xd9d1b0,
+    get hint() { return `Click: stick a charge on anything · ${bindText('detonate', 1)}: set them ALL off`; },
+    get desc() { return `Plant charges on walls, pillars, cars, people… they stick to whatever they hit and blink while they wait. Press ${bindText('detonate', 1)} (any time, whatever you hold) to set off every charge you planted, one after another. Put a few on a tower's ground floor and watch it come down.`; },
+    down() {
+      if (this.cd > 0) return;
+      this.cd = 0.22;
+      const owner = G.netRemote ? (G.netFrom || 'remote') : 'me';
+      let mine = 0;
+      for (const e of G.ents) if (!e.dead && e.def && e.def.id === 'c4' && e.owner === owner) mine++;
+      if (mine >= 40) { if (!G.netRemote) toast(`40 charges is the limit: ${bindText('detonate', 1)} to set them off`); return; }
+      createEnt(ITEMS.c4, throwPos(), { spawned: true, vel: throwVel(30, 1), angVel: new THREE.Vector3(rand(-3, 3), rand(-3, 3), rand(-3, 3)) });
+      sfx.pop();
+    },
+    // (the detonate key)
+    det() { return detonateC4(G.netRemote ? (G.netFrom || 'remote') : 'me'); },
+    update(dt) { cool(this, dt); },
+  },
+  {
     id: 'blackhole', name: 'Black Hole', icon: '🌀', color: 0x7b2cbf, hint: 'Click: throw a singularity. Sucks everything in… then pops',
     down() {
       if (this.cd > 0) return;
@@ -257,7 +315,7 @@ export const boomTools = [
   },
   {
     id: 'superhole', name: 'Super Black Hole', icon: '🕳️', color: 0x3c096c, hint: 'Click a spot: a huge black hole that eats EVERYTHING, even the ground and buildings. Click again to close it',
-    desc: 'Opens a giant black hole where you aim. It stays open until you click again, growing the whole time: it pulls everything in from 60 m (later 100 m) away and swallows it: objects, people, cars, chunks of building, and a ball of the ground itself up to 30 m across each way, leaving a huge round crater. When you close it, it evaporates in a flash.',
+    desc: 'Opens a giant black hole where you aim. It stays open until you click again and it has NO LIMIT: it grows by eating the ground, buildings, cars, people, everything. The bigger it gets the more it needs, but the stronger it gets: it reaches further and tears the ground away in bigger chunks, until there is nothing left on the whole map. When you close it, it evaporates in a flash.',
     down() {
       if (this.cd > 0) return;
       this.cd = 0.8;

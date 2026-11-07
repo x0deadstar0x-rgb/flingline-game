@@ -77,9 +77,11 @@ export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
   damage(e, dmg, dir, hit.point);
 }
 
-// generic projectile; returns the object so callers can tweak it
+// generic projectile; returns the object so callers can tweak it.
+// owner: the body it was fired from, which it never hits (in a room, someone else's shot starts
+// inside their body here); by: who fired it (people it hurts know who to blame)
 export function projectile(o) {
-  const p = Object.assign({ t: 0, life: 5, gravity: 0, collide: true }, o);
+  const p = Object.assign({ t: 0, life: 5, gravity: 0, collide: true, owner: G.netAvatar || null, by: G.actionBy || null }, o);
   if (p.mesh) { G.scene.add(p.mesh); p.mesh.position.copy(p.pos); }
   G.projectiles.push(p);
   return p;
@@ -101,12 +103,19 @@ export function updateProjectiles(dt) {
     }
     if (p.trail) p.trail(p.pos.clone(), p);
     let done = false;
-    if (p.collide && p.onHit) {
-      const h = raycast(_prev, p.pos, AIM_MASK);
-      if (h) { p.onHit(h, p); done = true; }
-      else if (p.water !== false && p.pos.y < G.waterAt(p.pos.x, p.pos.z)) { p.onHit({ point: p.pos.clone().setY(G.waterAt(p.pos.x, p.pos.z)), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
-    }
-    if (!done && p.t >= p.life) { if (p.end) p.end(p.pos.clone(), p); done = true; }
+    const by = G.actionBy;
+    G.actionBy = p.by;
+    try {
+      if (p.collide && p.onHit) {
+        const ow = p.owner, og = ow ? ow.collisionFilterGroup : 0;
+        if (ow) ow.collisionFilterGroup = 0;
+        const h = raycast(_prev, p.pos, AIM_MASK);
+        if (ow) ow.collisionFilterGroup = og;
+        if (h) { p.onHit(h, p); done = true; }
+        else if (p.water !== false && p.pos.y < G.waterAt(p.pos.x, p.pos.z)) { p.onHit({ point: p.pos.clone().setY(G.waterAt(p.pos.x, p.pos.z)), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
+      }
+      if (!done && p.t >= p.life) { if (p.end) p.end(p.pos.clone(), p); done = true; }
+    } finally { G.actionBy = by; }
     if (done) { if (p.mesh) G.scene.remove(p.mesh); G.projectiles.splice(i, 1); }
   }
 }
