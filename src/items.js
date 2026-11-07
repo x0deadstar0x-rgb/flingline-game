@@ -35,6 +35,7 @@ export const MAT = {
   hay:     { density: 12,  hp: 25,  thresh: 8,  brk: 'chunks', fr: 0.9, re: 0.05, buoy: 3, color: 0xd9b64a, min: 0.3 },
   flesh:   { density: 40,  hp: Infinity, thresh: 99, brk: 'none', fr: 0.7, re: 0.1, buoy: 1.4, color: 0xf0c8a0 },
   bouncyflesh: { density: 40, hp: Infinity, thresh: 99, brk: 'none', fr: 0.7, re: 0.95, buoy: 1.4, color: 0xff7ac8 },
+  dirt:    { density: 90,  hp: 14,  thresh: 7,  brk: 'crumble', fr: 0.85, re: 0.05, buoy: 0.6, color: 0x6b4f35 },
 };
 
 export function initMaterials() {
@@ -483,6 +484,12 @@ export function breakEnt(ent, dir, extra = 0) {
     sfx.shatter(pos);
     for (let i = 0; i < 26; i++) FX.particle({ pos: pos.clone().add(new THREE.Vector3(rand(-0.5, 0.5), rand(-0.5, 0.5), rand(-0.5, 0.5))), vel: vel.clone().add(new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4))), color: mat.color, size: rand(0.08, 0.22), life: rand(0.8, 1.5), gravity: 18, opacity: 0.8, spin: 8 });
     if (def.mat === 'crystal') FX.confetti(pos, 20, 6);
+    return;
+  }
+  if (brk === 'crumble') {
+    sfx.crumble(pos);
+    FX.debris(pos, color, 12, 0.14, 4);
+    FX.smoke(pos, 2, 0x8a7458, 0.4);
     return;
   }
   if (brk === 'splat') {

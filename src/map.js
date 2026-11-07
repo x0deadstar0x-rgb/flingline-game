@@ -7,6 +7,7 @@ import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope, addRop
 import { spawnDummy } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
+import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain } from './terrain.js';
 
 let mapGroup = null;
 let mapBodies = [];
@@ -151,83 +152,28 @@ function pallets(x, y, z, n = 3) { for (let i = 0; i < n; i++) put('pallet', x +
 
 
 // ------------------------------------------------------------- breakable terrain
-// Every ground map is a heightfield. Explosions dig craters into it (physics + visuals).
-let T = null;
-const _c = new THREE.Color();
-function makeTerrain({ W, es, height, color, bedrock = -8 }) {
-  const n = Math.round(W / es) + 1;
-  const data = [];
-  for (let i = 0; i < n; i++) { const col = []; for (let j = 0; j < n; j++) col.push(height(-W / 2 + i * es, W / 2 - j * es)); data.push(col); }
-  const shape = new CANNON.Heightfield(data, { elementSize: es });
-  const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
-  body.addShape(shape);
-  body.position.set(-W / 2, 0, W / 2);
-  body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  G.world.addBody(body); mapBodies.push(body);
-  const geo = new THREE.PlaneGeometry(W, W, n - 1, n - 1);
-  geo.rotateX(-Math.PI / 2);
-  const cols = new Float32Array(n * n * 3);
-  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
-  mesh.receiveShadow = true;
-  mapGroup.add(mesh);
-  T = { W, es, n, data, shape, body, geo, mesh, color, bedrock, scar: new Float32Array(n * n) };
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) setVertex(i, j);
-  geo.computeBoundingSphere();
-  G.groundAt = groundHeight;
-}
-function setVertex(i, j) {
-  const { n, data, geo, W, es, color, scar } = T;
-  const k = (n - 1 - j) * n + i;
-  const h = data[i][j];
-  geo.attributes.position.setY(k, h);
-  const x = -W / 2 + i * es, z = W / 2 - j * es;
-  _c.set(color(h, x, z));
-  // tiny per-vertex shade variation for the low-poly look (stable per vertex)
-  _c.offsetHSL(0, 0, (((i * 73856093) ^ (j * 19349663)) % 100) / 100 * 0.05 - 0.025);
-  if (scar[k] > 0) _c.lerp(new THREE.Color(0x4a3524), Math.min(1, scar[k]));
-  geo.attributes.color.setXYZ(k, _c.r, _c.g, _c.b);
-}
-export function groundHeight(x, z) {
-  if (!T) return -1e9;
-  const { W, es, data, n } = T;
-  const fx = (x + W / 2) / es, fz = (W / 2 - z) / es;
-  if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return -1e9;
-  const i = clamp(Math.floor(fx), 0, n - 2), j = clamp(Math.floor(fz), 0, n - 2);
-  const tx = fx - i, tz = fz - j;
-  const a = data[i][j], b = data[i + 1][j], c = data[i][j + 1], d = data[i + 1][j + 1];
-  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
-}
-// dig a crater. Called by explosions.
-export function crater(pos, r, depth) {
-  if (!T) return;
-  const g = groundHeight(pos.x, pos.z);
-  if (g < -1e8 || pos.y - g > r * 0.8) return; // explosion was in the air
-  const { W, es, n, data } = T;
-  const i0 = Math.max(0, Math.floor((pos.x - r * 1.3 + W / 2) / es)), i1 = Math.min(n - 1, Math.ceil((pos.x + r * 1.3 + W / 2) / es));
-  const j0 = Math.max(0, Math.floor((W / 2 - pos.z - r * 1.3) / es)), j1 = Math.min(n - 1, Math.ceil((W / 2 - pos.z + r * 1.3) / es));
-  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
-    const x = -W / 2 + i * es, z = W / 2 - j * es;
-    const d = Math.hypot(x - pos.x, z - pos.z) / r;
-    const k = (n - 1 - j) * n + i;
-    if (d < 1) {
-      data[i][j] = Math.max(T.bedrock, data[i][j] - depth * (1 - d * d));
-      T.scar[k] = Math.min(1, T.scar[k] + (1 - d) * 1.5);
-    } else if (d < 1.3) {
-      data[i][j] += depth * 0.12 * (1 - (d - 1) / 0.3); // little rim of dirt
-      T.scar[k] = Math.min(1, T.scar[k] + 0.3);
-    } else continue;
-    setVertex(i, j);
+// The ground is made of 0.5 m block columns (terrain.js). Explosions carve blocky craters.
+function makeTerrain(opts) { createTerrain(opts, mapGroup, mapBodies); }
+export function groundHeight(x, z) { return terrainHeight(x, z); }
+const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0.48, 0.48], mat: 'dirt' };
+// explosion crater: a ragged blocky bowl, flying cubes, dust, and a few real blocks you can grab
+export function crater(pos, power, opts = {}) {
+  const R = opts.radius ?? 2.3 * Math.pow(power, 0.5);
+  const res = carveTerrain(pos, R, opts);
+  if (!res) return null;
+  const at = new THREE.Vector3(pos.x, res.ground, pos.z);
+  const cols = res.sample.length ? res.sample : [0x6b4f35];
+  cubeBurst(at, Math.min(opts.maxCubes ?? 110, Math.round(res.removed * 0.55) + 8), cols, 7 + R * 2.4);
+  FX.smoke(at.clone().add(new THREE.Vector3(0, 0.5, 0)), Math.min(10, 3 + Math.round(R)), 0x8a7458, 0.6 + R * 0.25);
+  const real = Math.min(opts.realBlocks ?? 5, Math.floor(res.removed / 18));
+  for (let i = 0; i < real; i++) {
+    const a = rand(0, Math.PI * 2);
+    createEnt({ ...DIRT, color: cols[(Math.random() * cols.length) | 0] }, at.clone().add(new THREE.Vector3(Math.cos(a) * rand(0.3, R * 0.6), 0.6 + rand(0, 1), Math.sin(a) * rand(0.3, R * 0.6))),
+      { spawned: true, gen: 2, vel: new THREE.Vector3(Math.cos(a) * rand(3, 8), rand(6, 12), Math.sin(a) * rand(3, 8)), angVel: new THREE.Vector3(rand(-8, 8), rand(-8, 8), rand(-8, 8)) });
   }
-  T.shape.update();
-  T.shape.updateMinValue();
-  T.shape.updateMaxValue();
-  T.body.aabbNeedsUpdate = true;
-  T.geo.attributes.position.needsUpdate = true;
-  T.geo.attributes.color.needsUpdate = true;
-  FX.debris(new THREE.Vector3(pos.x, g + 0.3, pos.z), 0x5a4030, 14, 0.25, 9);
+  return res;
 }
-G.crater = (pos, power) => crater(pos, 2.2 * Math.pow(power, 0.55), 1.1 * Math.pow(power, 0.6));
+G.crater = (pos, power) => crater(pos, power);
 
 // ------------------------------------------------------------- shared building helpers
 function stack(id, x, y, z, w, d, h, size = 1) { // hollow box of blocks
@@ -618,7 +564,7 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; T = null; G.groundAt = null;
+  water = null; clouds = []; clearTerrain(); clearCubes(); G.groundAt = null;
   G.mapId = m.id;
   G.map = m;
   G.killY = m.killY;
@@ -677,6 +623,8 @@ export function applyTime(mode) {
 
 const _padT = new WeakMap();
 export function updateMap(dt) {
+  updateTerrain();
+  updateCubes(dt);
   if (water) {
     const p = water.geometry.attributes.position;
     const t = G.time;
