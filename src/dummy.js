@@ -6,6 +6,8 @@ import { MAT } from './items.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
 
+// how a frozen person looks (one shared material)
+const ICE_SKIN = new THREE.MeshStandardMaterial({ color: 0xaeeaff, transparent: true, opacity: 0.85, emissive: 0x1a5f7a, emissiveIntensity: 0.4, flatShading: true });
 const VARIANTS = {
   normal: { s: 1, mass: 1, speed: 1.7, mat: 'flesh', buoy: 1.4 },
   big:    { s: 1.6, mass: 1, speed: 1.5, mat: 'flesh', buoy: 1.4 },
@@ -72,7 +74,19 @@ export function buildHumanoid(s, colors) {
   // belt
   const belt = new THREE.Mesh(new THREE.BoxGeometry(0.58 * s, 0.08 * s, 0.32 * s), new THREE.MeshStandardMaterial({ color: 0x2b2118, flatShading: true }));
   belt.position.y = -0.33 * s; meshes.torso.add(belt);
+  if (colors.hat && colors.hat !== 'none') addHat(meshes.head, colors.hat, colors.hatColor ?? 0xe63946, s);
   return meshes;
+}
+
+// hats (profile look): cap, beanie, top hat, crown, helmet
+export function addHat(head, type, color, s = 1) {
+  const m = new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: type === 'crown' ? 0.3 : 0.8, metalness: type === 'crown' || type === 'helmet' ? 0.5 : 0 });
+  const add = (geo, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x * s, y * s, z * s); o.castShadow = true; head.add(o); return o; };
+  if (type === 'cap') { add(new THREE.BoxGeometry(0.54 * s, 0.14 * s, 0.54 * s), 0, 0.2, 0); add(new THREE.BoxGeometry(0.5 * s, 0.05 * s, 0.25 * s), 0, 0.15, 0.3); }
+  else if (type === 'beanie') { add(new THREE.BoxGeometry(0.56 * s, 0.22 * s, 0.56 * s), 0, 0.2, 0); add(new THREE.IcosahedronGeometry(0.07 * s, 0), 0, 0.35, 0); }
+  else if (type === 'tophat') { add(new THREE.CylinderGeometry(0.34 * s, 0.34 * s, 0.04 * s, 10), 0, 0.22, 0); add(new THREE.CylinderGeometry(0.21 * s, 0.22 * s, 0.42 * s, 10), 0, 0.44, 0); }
+  else if (type === 'crown') { add(new THREE.CylinderGeometry(0.27 * s, 0.27 * s, 0.1 * s, 10, 1, true), 0, 0.26, 0); for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; add(new THREE.ConeGeometry(0.05 * s, 0.13 * s, 4), Math.cos(a) * 0.25, 0.36, Math.sin(a) * 0.25); } }
+  else if (type === 'helmet') { const h = add(new THREE.IcosahedronGeometry(0.31 * s, 1), 0, 0.06, -0.02); h.scale.set(1, 0.85, 1); add(new THREE.BoxGeometry(0.5 * s, 0.1 * s, 0.06 * s), 0, 0.02, 0.27).material = new THREE.MeshStandardMaterial({ color: 0x202833, roughness: 0.2, metalness: 0.6, flatShading: true }); }
 }
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3();
@@ -183,7 +197,9 @@ export class Dummy {
   makeStanding(feet) {
     const s = this.s;
     const body = new CANNON.Body({ mass: this.massTotal, material: G.mats.player, fixedRotation: true, collisionFilterGroup: GROUP.DYN, linearDamping: 0.0, allowSleep: false });
-    body.addShape(new CANNON.Sphere(0.3 * s), new CANNON.Vec3(0, -0.65 * s, 0));
+    // like the player: the shape floats above the feet and a spring holds it up, so dummies walk
+    // smoothly up and down block steps instead of catching on them
+    body.addShape(new CANNON.Sphere(0.22 * s), new CANNON.Vec3(0, -0.25 * s, 0));
     body.addShape(new CANNON.Box(new CANNON.Vec3(0.3 * s, 0.6 * s, 0.18 * s)), new CANNON.Vec3(0, 0.35 * s, 0));
     body.position.set(feet.x, feet.y + 0.95 * s + 0.02, feet.z);
     body.updateMassProperties();
@@ -201,6 +217,7 @@ export class Dummy {
     });
     G.world.addBody(body);
     this.body = body;
+    this.hover = null;
     this.state = 'standing';
     // put the limbs in place right away, so a knock before the first frame
     // turns into a ragdoll here (not at the world origin)
@@ -326,12 +343,12 @@ export class Dummy {
     for (const n of PARTS) {
       const e = this.parts[n];
       if (e.frozen) continue;
-      e.frozen = 1;
+      e.frozen = Infinity; // the person's own timer (this.frozen) decides when they thaw
       e.origMass = e.body.mass;
       e.body.type = CANNON.Body.STATIC; e.body.mass = 0; e.body.updateMassProperties();
       e.body.velocity.setZero(); e.body.angularVelocity.setZero();
       e.mesh.userData.orig = e.mesh.material;
-      e.mesh.material = new THREE.MeshStandardMaterial({ color: 0xaeeaff, transparent: true, opacity: 0.85, emissive: 0x1a5f7a, emissiveIntensity: 0.4, flatShading: true });
+      e.mesh.material = ICE_SKIN;
     }
   }
   unfreeze() {
@@ -551,8 +568,21 @@ export class Dummy {
     const ai = this.ai;
     const feet = this.origin();
     if (feet.y < G.waterAt(feet.x, feet.z) - 0.4 || feet.y < (G.killY ?? -30)) { this.knock(null); return; }
-    const ground = raycast(new THREE.Vector3(b.position.x, b.position.y - 0.6 * s, b.position.z), new THREE.Vector3(b.position.x, b.position.y - 1.15 * s, b.position.z));
-    const grounded = !!ground;
+    // safety net: never stand inside the ground
+    if (G.groundAt) { const gy = G.groundAt(feet.x, feet.z); if (gy > -1e8 && feet.y < gy - 0.35) { b.position.y = gy + 0.95 * s + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; } }
+    // ground under the centre and a little ahead (so steps lift them early)
+    const hs0 = Math.hypot(b.velocity.x, b.velocity.z);
+    const ax = hs0 > 0.4 ? b.velocity.x / hs0 * 0.3 * s : 0, az = hs0 > 0.4 ? b.velocity.z / hs0 * 0.3 * s : 0;
+    let ground = null;
+    for (const [dx, dz] of [[0, 0], [ax, az]]) {
+      const h = raycast(new THREE.Vector3(b.position.x + dx, b.position.y - 0.2 * s, b.position.z + dz), new THREE.Vector3(b.position.x + dx, b.position.y - 1.7 * s, b.position.z + dz));
+      if (!h || h.normal.y < 0.5 || h.point.y > b.position.y - 0.95 * s + 0.62) continue;
+      if (!ground || h.point.y > ground.point.y) ground = h;
+    }
+    const gapD = ground ? b.position.y - (ground.point.y + 0.95 * s) : 1e9;
+    const grounded = !!ground && gapD < 0.35 && gapD > -0.65 && b.velocity.y < 5 && !(ai.jumpT > 0);
+    ai.jumpT = Math.max(0, (ai.jumpT || 0) - dt);
+    this.hover = grounded ? ground.point.y + 0.95 * s : null;
     let speed = 0;
     const want = new THREE.Vector3();
     const kind = this.cfg.ai;
@@ -704,7 +734,7 @@ export class Dummy {
       }
       if (kind === 'ninja') {
         ai.jump -= dt;
-        if (ai.jump <= 0 && grounded && speed > 0 && this.pathOk(want, 4)) { ai.jump = rand(0.8, 2.5); b.velocity.y = 9; }
+        if (ai.jump <= 0 && grounded && speed > 0 && this.pathOk(want, 4)) { ai.jump = rand(0.8, 2.5); b.velocity.y = 9; ai.jumpT = 0.3; this.hover = null; }
       }
       if (ai.mode === 'walk' && kind === 'ninja') speed = this.cfg.speed;
     }
@@ -991,6 +1021,16 @@ export class Dummy {
     if (inWater && this.downTime > 14 && !busy) this.respawn();
   }
 }
+
+// the dummies' standing spring (every physics step)
+G.extraForces.push(() => {
+  for (const d of G.dummies) {
+    if (d.state !== 'standing' || d.hover == null || !d.body || d.ai.mode === 'seated') continue;
+    const b = d.body;
+    const ay = clamp((d.hover - b.position.y) * 140 - b.velocity.y * 23, -40, 60);
+    b.applyForce(new CANNON.Vec3(0, b.mass * (9.82 + ay), 0));
+  }
+});
 
 export function spawnDummy(pos, variant = 'normal', opts = {}) {
   let n = 0;

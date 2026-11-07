@@ -13,15 +13,15 @@ for (let i = 0; i < 256; i++) { const c = i / 255; TO_SRGB[i] = Math.round(255 *
 const cache = new Map();   // key -> dataURL
 const waiting = new Map(); // key -> [callbacks]
 const queue = [];
-let raw = null, rawCtx = null;
+let raw = null, rawCtx = null, amb = null, key1 = null;
 let rt = null, scene = null, cam = null, canvas = null, ctx2d = null, pixels = null, running = false;
 const white = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0xcfcfcf });
 
 function setup() {
   rt = new THREE.WebGLRenderTarget(SIZE, SIZE, { samples: 4 });
   scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.2));
-  const d = new THREE.DirectionalLight(0xffffff, 0.45); d.position.set(-2, 4, 3); scene.add(d);
+  amb = new THREE.AmbientLight(0xffffff, 0.2); scene.add(amb);
+  key1 = new THREE.DirectionalLight(0xffffff, 0.45); key1.position.set(-2, 4, 3); scene.add(key1);
   cam = new THREE.PerspectiveCamera(28, 1, 0.01, 200);
   canvas = document.createElement('canvas'); canvas.width = canvas.height = SIZE;
   ctx2d = canvas.getContext('2d');
@@ -32,7 +32,17 @@ function setup() {
 
 // the 3D thing to draw for a key like "item:crate", "tool:blaster"
 function makeObject(key) {
-  const [kind, id] = key.split(':');
+  const kind = key.slice(0, key.indexOf(':')), id = key.slice(key.indexOf(':') + 1);
+  if (kind === 'avatar') {
+    // a profile's look, in colour
+    const l = JSON.parse(id);
+    const g = new THREE.Group();
+    const meshes = buildHumanoid(1, { skin: l.skin, shirt: l.shirt, pants: l.pants, sleeve: true, hat: l.hat, hatColor: l.hatColor });
+    poseHumanoid(meshes, 1, new THREE.Vector3(), 0.45, 0.6, 0.25, {});
+    for (const n in meshes) g.add(meshes[n]);
+    g.userData.colour = true;
+    return g;
+  }
   const g = new THREE.Group();
   if (kind === 'tool') {
     const m = toolModel(id);
@@ -77,7 +87,8 @@ function makeObject(key) {
 function render(key) {
   const obj = makeObject(key);
   if (!obj) return null;
-  obj.traverse((o) => { if (o.isMesh) { o.material = white; o.castShadow = false; o.receiveShadow = false; } if (o.isSprite || o.isPoints || o.isLine) o.visible = false; });
+  const colour = !!obj.userData.colour;
+  obj.traverse((o) => { if (o.isMesh) { if (!colour) o.material = white; o.castShadow = false; o.receiveShadow = false; } if (o.isSprite || o.isPoints || o.isLine) o.visible = false; });
   scene.add(obj);
   obj.updateMatrixWorld(true);
   // frame it: look a bit from above, fit the bounding sphere
@@ -91,6 +102,7 @@ function render(key) {
   cam.lookAt(sphere.center);
   cam.updateProjectionMatrix();
   const R = G.renderer;
+  amb.intensity = colour ? 1.2 : 0.2; key1.intensity = colour ? 1.6 : 0.45;
   const oldTarget = R.getRenderTarget(), oldColor = R.getClearColor(new THREE.Color()), oldAlpha = R.getClearAlpha();
   const oldShadow = R.shadowMap.enabled;
   R.shadowMap.enabled = false;

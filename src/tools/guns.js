@@ -5,7 +5,18 @@ import { G, rand, raycast, popup, tv } from '../core.js';
 import { spawnItem, ignite, damage, removeEnt } from '../items.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
-import { aimHit, bulletHit, spreadDir, AIM_MASK, bodiesNear, dummiesNear, dummyOf, massFactor } from './common.js';
+import { aimHit, bulletHit, spreadDir, AIM_MASK, bodiesNear, dummiesNear, dummyOf, massFactor, projectile } from './common.js';
+
+// the Blaster's energy bolt: a bright core inside a soft additive glow, stretched along its flight
+const boltCore = new THREE.CapsuleGeometry(0.035, 0.9, 2, 6);
+const boltGlow = new THREE.CapsuleGeometry(0.1, 1.0, 2, 8);
+const boltCoreMat = new THREE.MeshBasicMaterial({ color: 0xfffbe0 });
+const boltGlowMat = new THREE.MeshBasicMaterial({ color: 0xffc83a, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false });
+function boltMesh() {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(boltCore, boltCoreMat), new THREE.Mesh(boltGlow, boltGlowMat));
+  return g;
+}
 
 function shoot(dir, range, dmg, imp, color, width = 0.04, life = 0.07) {
   const s = G.aim.start;
@@ -20,48 +31,64 @@ function cool(tool, dt) { tool.cd = Math.max(0, (tool.cd || 0) - dt); return too
 
 export const gunTools = [
   {
-    id: 'blaster', name: 'Blaster', icon: '🔫', color: 0xffd23f, hint: 'Click / hold: shoot. Breaks blocks, pops TNT',
-    down() { this.fire(); },
-    held(dt) { if (cool(this, dt)) this.fire(); },
+    // energy pistol: one glowing bolt per click (you can see it fly), not an automatic
+    id: 'blaster', name: 'Blaster', icon: '🔫', color: 0xffd23f, hint: 'Click: fire an energy bolt (one per click). Breaks blocks, pops TNT',
+    desc: 'A sci-fi pistol. Every click fires a fast glowing bolt you can watch fly. Accurate, punchy, pops TNT.',
+    down() {
+      if (this.cd > 0) return; this.cd = 0.22;
+      sfx.shoot();
+      const dir = spreadDir(G.aim.dir, 0.004);
+      const s = G.aim.start.clone().addScaledVector(dir, 0.6);
+      const mesh = boltMesh();
+      projectile({
+        pos: G.aim.hand.clone(), vel: dir.clone().multiplyScalar(150), life: 2, gravity: 0, mesh,
+        // first frame: from the gun to where you aim (so it lines up with the crosshair)
+        steer: (p) => { if (!p.lined) { p.lined = true; p.pos.copy(s); } },
+        trail: (pp) => FX.particle({ pos: pp, vel: new THREE.Vector3(), color: 0xffe066, size: 0.09, life: 0.12, glow: true, add: true, gravity: 0, drag: 0, spin: 0, floor: false }),
+        onHit: (h) => { if (h.water) { FX.splash(h.point, 6, 0.6); return; } bulletHit(h, dir, 24, 6, 0xffe066); FX.flashAt(h.point, 6, 0xffd23f); },
+      });
+    },
     update(dt) { cool(this, dt); },
-    fire() { if (this.cd > 0) return; this.cd = 0.13; sfx.shoot(); shoot(spreadDir(G.aim.dir, 0.006), 200, 18, 5, 0xffe066); G.player.swing = 0; },
   },
   {
-    id: 'shotgun', name: 'Shotgun', icon: '💥', color: 0xff8a1c, hint: 'Click: 9 pellets of chaos',
+    id: 'shotgun', name: 'Shotgun', icon: '💥', color: 0xff8a1c, hint: 'Click: pump shotgun, 10 pellets — brutal up close',
+    desc: 'Slow pump action, 10 pellets in a wide cone. Wrecks anything close and kicks you back a little.',
     down() {
-      if (this.cd > 0) return; this.cd = 0.75;
+      if (this.cd > 0) return; this.cd = 0.9;
       sfx.shotgun();
-      for (let i = 0; i < 9; i++) shoot(spreadDir(G.aim.dir, 0.07), 60, 10, 4.5, 0xffb347, 0.03, 0.06);
-      G.player.fling(G.aim.dir.clone().multiplyScalar(-2.5));
+      for (let i = 0; i < 10; i++) shoot(spreadDir(G.aim.dir, 0.075), 60, 11, 5, 0xffb347, 0.03, 0.06);
+      G.player.fling(G.aim.dir.clone().multiplyScalar(-3));
       G.shake = Math.max(G.shake, 0.3);
     },
     update(dt) { cool(this, dt); },
   },
   {
-    id: 'minigun', name: 'Minigun', icon: '🌀', color: 0xc0c0c0, hint: 'Hold click: spin up and shred',
+    id: 'minigun', name: 'Minigun', icon: '🌀', color: 0xc0c0c0, hint: 'Hold click: spin up, then spray — fast and inaccurate',
+    desc: 'Hold to spin the barrels up, then it sprays bullets very fast. Each one is weak and it is not accurate, but nothing survives a long burst.',
     spin: 0,
     held(dt) {
-      this.spin = Math.min(1, this.spin + dt * 2.5);
-      if (this.spin < 0.6) { sfx.whir(this.spin); return; }
+      this.spin = Math.min(1, this.spin + dt * 1.7);
+      if (this.spin < 0.65) { sfx.whir(this.spin); return; }
       this.acc = (this.acc || 0) + dt;
-      while (this.acc > 0.045) { this.acc -= 0.045; sfx.minigun(); shoot(spreadDir(G.aim.dir, 0.03), 150, 7, 2.2, 0xfff1a8, 0.03, 0.05); if (G.recoil) G.recoil(0.45); }
+      while (this.acc > 0.05) { this.acc -= 0.05; sfx.minigun(); shoot(spreadDir(G.aim.dir, 0.045), 150, 6, 2, 0xfff1a8, 0.03, 0.05); if (G.recoil) G.recoil(0.45); }
       G.shake = Math.max(G.shake, 0.08);
     },
     update(dt, input) { if (!input.mouseDown) this.spin = Math.max(0, this.spin - dt * 2); G.toolSpin = this.spin; },
     unequip() { G.toolSpin = 0; },
   },
   {
-    id: 'sniper', name: 'Railgun', icon: '🎯', color: 0x9ad9ff, hint: 'Click: piercing shot through up to 6 things',
+    id: 'sniper', name: 'Railgun', icon: '🎯', color: 0x9ad9ff, hint: 'Click: one huge piercing shot through up to 8 things (400 m)',
+    desc: 'Slow but devastating: the slug goes straight through up to 8 things, 400 m away, and punches holes in the ground.',
     down() {
-      if (this.cd > 0) return; this.cd = 1.0;
+      if (this.cd > 0) return; this.cd = 1.2;
       sfx.rail();
       const dir = G.aim.dir.clone();
       let s = G.aim.start.clone();
-      let end = s.clone().addScaledVector(dir, 300);
-      for (let i = 0; i < 6; i++) {
-        const h = raycast(s, s.clone().addScaledVector(dir, 300), AIM_MASK);
+      let end = s.clone().addScaledVector(dir, 400);
+      for (let i = 0; i < 8; i++) {
+        const h = raycast(s, s.clone().addScaledVector(dir, 400), AIM_MASK);
         if (!h) break;
-        bulletHit(h, dir, 90, 22, 0x9ad9ff);
+        bulletHit(h, dir, 120, 26, 0x9ad9ff);
         end = h.point;
         if (!h.body.ent) break; // stops at the world
         s = h.point.clone().addScaledVector(dir, 0.02);
@@ -78,8 +105,8 @@ export const gunTools = [
     down() {
       if (this.cd > 0) return; this.cd = 0.55;
       sfx.zap();
-      const h = aimHit(80);
-      const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 80);
+      const h = aimHit(140);
+      const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 140);
       FX.lightning(G.aim.hand, end);
       FX.flashAt(end, 30, 0x8ec5ff);
       if (!h) return;
@@ -103,8 +130,8 @@ export const gunTools = [
       };
       if (h.body.ent) cur = zap(h.body, null) || cur;
       for (let i = 0; i < 6; i++) {
-        let best = null, bd = 9;
-        for (const o of bodiesNear(cur, 9)) {
+        let best = null, bd = 11;
+        for (const o of bodiesNear(cur, 11)) {
           const d = dummyOf(o.b);
           if (zapped.has(d || o.b)) continue;
           if (o.d < bd) { bd = o.d; best = o.b; }

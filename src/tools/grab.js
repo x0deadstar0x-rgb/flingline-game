@@ -140,13 +140,13 @@ function release(sound = true) {
 }
 
 function tryGrab() {
-  const hit = aimHit(HOOK_REACH);
-  if (!hit) { toast('Nothing in reach'); return; }
+  const hit = aimHit(REACH);
+  if (!hit) { toast(`Nothing in reach (grab: ${REACH} m)`); return; }
   let body = hit.body;
   const d = dummyOf(body);
   const e = body.ent;
   const loose = d || (e && (body.type === CANNON.Body.DYNAMIC || e.frozen || e.anchored));
-  if (!loose) { if (body.type !== CANNON.Body.DYNAMIC) { hook(hit); return; } }
+  if (!loose) { toast('Nothing loose to grab there (the Grappling Hook tool hooks the ground)'); return; }
   if (hit.dist > REACH) { toast(`Too far to grab things — get within ${REACH} m (the hook reaches ${HOOK_REACH} m)`); return; }
   let local;
   if (d) {
@@ -183,6 +183,14 @@ function tryGrab() {
   FX.sparks(hit.point, hit.normal, 0xffffff, 6, 3);
 }
 
+// grappling hook key: hook whatever solid thing you aim at
+function hookAim() {
+  const hit = aimHit(HOOK_REACH);
+  if (!hit) { toast(`Nothing to hook (reach ${HOOK_REACH} m)`); return; }
+  const d = dummyOf(hit.body), e = hit.body.ent;
+  if (d || (e && hit.body.type === CANNON.Body.DYNAMIC)) { toast(`That's loose — grab it with ${bindText('grab', 1)} instead`); return; }
+  hook(hit);
+}
 function hook(hit) {
   const dist = hit.point.distanceTo(G.aim.start);
   G.grab = { hook: true, anchor: new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z), point: hit.point.clone(), dist: Math.max(LEN_MIN, dist), tension: 0, zip: 0 };
@@ -304,6 +312,8 @@ function ropeSag(g, d) {
 export const line = {
   holding: () => !!G.grab,
   toggle() { if (G.grab) release(); else tryGrab(); },
+  grab() { tryGrab(); },
+  hook() { hookAim(); },
   throwIt() { throwIt(); },
   anchor() { anchorHeld(); },
   release(sound = false) { release(sound); },
@@ -320,10 +330,10 @@ export const line = {
         const ap = tv(g.anchor);
         strand.setColor(tmpC.copy(cLoose).lerp(cTight, clamp(g.tension, 0, 1) * 0.6));
         strand.update(hand, ap, ropeSag(g, ap.distanceTo(hand)), null);
-        G.lineNote = `Hooked · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: zip · ${bindText('grab', 1)}: let go · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel`;
+        G.lineNote = `Hooked · ${g.dist.toFixed(1)} m · ${bindText('grab', 1)}: zip · ${bindText('use', 1)}: let go · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel in / out`;
         return;
       }
-      G.lineNote = input.held('rotate') ? 'Rotating — move the mouse' : `Holding · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: THROW · ${bindText('grab', 1)}: drop · ${bindText('anchor', 1)}: anchor in place · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: closer/further · ${bindText('rotate', 1)}+mouse: turn`;
+      G.lineNote = input.held('rotate') ? 'Rotating — move the mouse' : `Holding · ${g.dist.toFixed(1)} m · ${bindText('grab', 1)}: THROW · ${bindText('use', 1)}: drop · ${bindText('anchor', 1)}: anchor in place · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: closer/further · ${bindText('rotate', 1)}+mouse: turn`;
       g.target.copy(target());
       const wp = tv(g.body.pointToWorldFrame(g.local));
       // only snaps if it gets stuck far behind (e.g. you walked away from something wedged under a building)
@@ -344,11 +354,11 @@ export const line = {
       }
     } else strand.hide();
     if (showHint) {
-      const h = aimHit(HOOK_REACH);
+      const h = aimHit(REACH);
       G.crossHint = null;
       if (h) {
         const loose = h.body.type === CANNON.Body.DYNAMIC || dummyOf(h.body) || (h.body.ent && (h.body.ent.frozen || h.body.ent.anchored));
-        G.crossHint = loose ? (h.dist <= REACH ? 'grab' : null) : 'hook';
+        G.crossHint = loose && h.dist <= REACH ? 'grab' : null;
       }
     }
   },
@@ -357,7 +367,21 @@ export const line = {
 // "Hands": an empty hotbar slot. Clicking grabs with the line (like the grab key).
 export const handsTool = {
   id: 'hands', name: 'Hands', icon: '✋', color: 0xffffff,
-  get hint() { return `Click or ${bindText('grab', 1)}: grab with your Fling Line (ground & walls: grappling hook)`; },
+  get hint() { return `Click or ${bindText('grab', 1)}: grab with your Fling Line`; },
   desc: 'No tool, just your Fling Line. Click grabs (same as the grab key). You always have the Fling Line, whatever tool you hold.',
   down() { line.toggle(); },
+};
+
+// Grappling Hook: click the ground, a wall or a building to hook on; swing, reel in / out,
+// grab key to zip to the hook, click again to let go.
+export const grappleTool = {
+  id: 'grapple', name: 'Grappling Hook', icon: '🪝', color: 0x9aa4ae,
+  get hint() { return `Click: hook the ground / walls (${HOOK_REACH} m) · click again: let go · ${bindText('grab', 1)}: zip · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel`; },
+  desc: 'Hook anything solid — the ground, walls, buildings — and swing from it like a rope. Reel yourself in or out, zip straight to the hook, click to let go.',
+  down() { hookAim(); },
+  update() {
+    if (G.grab) return;
+    const h = aimHit(HOOK_REACH);
+    G.crossHint = h && !(dummyOf(h.body) || (h.body.ent && h.body.type === CANNON.Body.DYNAMIC)) ? 'hook' : null;
+  },
 };

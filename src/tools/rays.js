@@ -14,8 +14,8 @@ function rayTool(id, name, icon, color, hint, cd, onHit) {
     id, name, icon, color, hint,
     down() {
       if (this.cd > 0) return; this.cd = cd;
-      const h = aimHit(120);
-      const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 120);
+      const h = aimHit(300);
+      const end = h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 300);
       FX.beam(G.aim.hand, end, color, 0.07, 0.2);
       FX.beam(G.aim.hand, end, 0xffffff, 0.025, 0.2);
       sfx.ray(color);
@@ -87,16 +87,16 @@ export const rayTools = [
       } else if (dir.y < 0) pv.y = Math.max(pv.y, -dir.y * RECOIL + 2);
       else pv.y -= dir.y * RECOIL * 0.6;
       G.player.stun = Math.max(G.player.stun, 0.3);
-      for (const d of dummiesNear(hand, 16)) {
+      for (const d of dummiesNear(hand, 22)) {
         const to = d.center().sub(hand); const len = to.length();
         if (to.dot(dir) / len < 0.75) continue;
-        const k = 24 * (1 - len / 16) + 6;
+        const k = 24 * (1 - len / 22) + 6;
         d.knock(dir.clone().multiplyScalar(k).add(new THREE.Vector3(0, 5, 0)));
       }
-      for (const o of bodiesNear(hand, 16, dir, 0.75)) {
+      for (const o of bodiesNear(hand, 22, dir, 0.75)) {
         if (dummyOf(o.b)) continue;
         if (o.b.ent && o.b.ent.frozen) unfreeze(o.b.ent);
-        const k = (26 * (1 - o.d / 16) + 4) * massFactor(o.b.mass);
+        const k = (26 * (1 - o.d / 22) + 4) * massFactor(o.b.mass);
         o.b.velocity.x += dir.x * k; o.b.velocity.y += dir.y * k + 3 * massFactor(o.b.mass); o.b.velocity.z += dir.z * k;
         o.b.wakeUp();
       }
@@ -105,25 +105,27 @@ export const rayTools = [
     update(dt) { cool(this, dt); },
   },
   magnet,
-  rayTool('freeze', 'Freeze Ray', '❄️', 0x7fe8ff, 'Click: freeze in place (hit again to thaw). Frozen things shatter easily', 0.2, (h) => {
+  // frozen things stay frozen until you thaw them: hit them with the ray again, blow them up,
+  // set them on fire, or grab / push them
+  rayTool('freeze', 'Freeze Ray', '❄️', 0x7fe8ff, 'Click: freeze it solid, even in mid-air. It stays frozen until you hit it again (or burn / blast it). Frozen things shatter easily', 0.2, (h) => {
     const d = dummyOf(h.body);
-    if (d) { if (d.frozen) d.unfreeze(); else d.freeze(12); sfx.freeze(); return; }
+    if (d) { if (d.frozen) d.unfreeze(); else d.freeze(Infinity); sfx.freeze(); return; }
     const e = h.body.ent;
     if (!e) return;
-    if (e.frozen) unfreeze(e); else freeze(e, 12);
+    if (e.frozen) unfreeze(e); else freeze(e, Infinity);
     if (e.burn > 0) { e.burn = 0; G.burning--; }
     sfx.freeze();
   }),
-  rayTool('antigrav', 'Anti-Gravity Ray', '🪐', 0xc77dff, 'Click: make it float away for 10s', 0.2, (h) => {
+  rayTool('antigrav', 'Anti-Gravity Ray', '🪐', 0xc77dff, 'Click: it floats up and away for 15 s. Reaches 300 m', 0.2, (h) => {
     const d = dummyOf(h.body);
     if (d) {
       if (d.state === 'standing') d.knock(new THREE.Vector3(0, 3, 0));
-      for (const n in d.parts) { d.parts[n].antigrav = 10; d.parts[n].body.wakeUp(); }
+      for (const n in d.parts) { d.parts[n].antigrav = 15; d.parts[n].body.wakeUp(); }
       return;
     }
     const e = h.body.ent;
     if (!e || h.body.type !== CANNON.Body.DYNAMIC) return;
-    e.antigrav = 10; h.body.velocity.y += 2; h.body.wakeUp();
+    e.antigrav = 15; h.body.velocity.y += 2; h.body.wakeUp();
   }),
   rayTool('grow', 'Grow Ray', '🔼', 0x7cff5a, 'Click: make things BIGGER (heavier, too)', 0.25, (h) => {
     const d = dummyOf(h.body);
@@ -144,7 +146,7 @@ export const rayTools = [
     id: 'teleport', name: 'Teleporter', icon: '🌀', color: 0x3bd1ff, hint: 'Click a spot: blink there',
     down() {
       if (this.cd > 0) return; this.cd = 0.35;
-      const h = aimHit(150);
+      const h = aimHit(300);
       if (!h) { toast('Aim at something'); return; }
       const from = G.player.pos();
       const to = h.point.clone().addScaledVector(h.normal, 1.0).add(new THREE.Vector3(0, 0.9, 0));

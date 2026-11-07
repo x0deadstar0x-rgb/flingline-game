@@ -6,7 +6,7 @@ import { damage, detonate } from '../items.js';
 import * as FX from '../fx.js';
 import { cubeBurst, terrainTopColor, carveTerrain } from '../terrain.js';
 
-export const AIM_MASK = GROUP.DYN | GROUP.STATIC;
+export const AIM_MASK = GROUP.DYN | GROUP.STATIC | GROUP.DEBRIS;
 
 export function aimHit(range = 150) {
   const s = G.aim.start || G.aim.origin;
@@ -65,7 +65,7 @@ export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
     b.wakeUp();
   }
   if (e.def && e.def.explosive) { if (e.def.explosive.hp <= dmg || (e.hp -= dmg) <= 0) detonate(e, 0.03); return; }
-  damage(e, dmg, dir);
+  damage(e, dmg, dir, hit.point);
 }
 
 // generic projectile; returns the object so callers can tweak it

@@ -1,8 +1,10 @@
 // Shared game state + small helpers used by every module.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { getP, setP } from './store.js';
 
-export const GROUP = { DYN: 1, PLAYER: 2, STATIC: 4 };
+// DEBRIS: small broken bits. They don't collide with each other (big speed-up in rubble piles).
+export const GROUP = { DYN: 1, PLAYER: 2, STATIC: 4, DEBRIS: 8 };
 export const WATER_Y = -1.0;
 export const ISLAND = 70; // half size of the island top
 
@@ -39,10 +41,10 @@ export const G = {
   mapId: 'island',
 };
 
-try { G.stats.best = parseFloat(localStorage.getItem('fling_best') || '0') || 0; } catch (e) { /* ignore */ }
+G.stats.best = +(getP('stats', {}).best || 0);
 
 export function saveBest() {
-  try { localStorage.setItem('fling_best', String(G.stats.best)); } catch (e) { /* ignore */ }
+  setP('stats', { ...getP('stats', {}), best: G.stats.best });
 }
 
 // Where to DRAW a physics body: the smoothed (interpolated) position between
@@ -70,18 +72,28 @@ const _rr = new CANNON.RaycastResult();
 const _from = new CANNON.Vec3();
 const _to = new CANNON.Vec3();
 // Physics raycast. Returns {body, point, normal, dist} or null.
-export function raycast(from, to, mask = GROUP.DYN | GROUP.STATIC) {
-  _rr.reset();
-  _from.set(from.x, from.y, from.z);
-  _to.set(to.x, to.y, to.z);
-  G.world.raycastClosest(_from, _to, { collisionFilterMask: mask, skipBackfaces: true }, _rr);
-  if (!_rr.hasHit) return null;
-  return {
-    body: _rr.body,
-    point: tv(_rr.hitPointWorld),
-    normal: tv(_rr.hitNormalWorld),
-    dist: _rr.distance,
-  };
+export function raycast(from, to, mask = GROUP.DYN | GROUP.STATIC | GROUP.DEBRIS) {
+  // long rays go in 24 m pieces: the first piece that hits something has the closest hit,
+  // and each piece only has to look at the ground patches it passes over
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+  const len = Math.hypot(dx, dy, dz);
+  const n = Math.max(1, Math.ceil(len / 24));
+  for (let s = 0; s < n; s++) {
+    const a = s / n, b = (s + 1) / n;
+    _rr.reset();
+    _from.set(from.x + dx * a, from.y + dy * a, from.z + dz * a);
+    _to.set(from.x + dx * b, from.y + dy * b, from.z + dz * b);
+    G.world.raycastClosest(_from, _to, { collisionFilterMask: mask, skipBackfaces: true }, _rr);
+    if (_rr.hasHit) {
+      return {
+        body: _rr.body,
+        point: tv(_rr.hitPointWorld),
+        normal: tv(_rr.hitNormalWorld),
+        dist: _rr.distance + len * a,
+      };
+    }
+  }
+  return null;
 }
 
 export function wakeAround(pos, r) {
