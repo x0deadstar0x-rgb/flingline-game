@@ -43,6 +43,9 @@
   #crosshair::after { top: 8px; left: 2px; height: 2px; width: 14px; }
   #crosshair.grab { width: 26px; height: 26px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 3px rgba(0,0,0,0.8); }
   #crosshair.grab::before, #crosshair.grab::after { display: none; }
+  #crosshair.hook { width: 20px; height: 20px; border: 2px solid #fff; transform: translate(-50%, -50%) rotate(45deg); box-shadow: 0 0 3px rgba(0,0,0,0.8); }
+  #crosshair.hook::before, #crosshair.hook::after { display: none; }
+  body.photo #hud, body.photo #toast, body.photo #popups { display: none; }
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 6; }
   #stats { position: fixed; left: 16px; top: 14px; font: 600 11px var(--mono); letter-spacing: 1px; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
   #stats .row { display: flex; gap: 6px; align-items: baseline; }

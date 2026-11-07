@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, updatePopups, updateToast, toast } from './core.js';
-import { initAudio, toggleMute, setListener, setVolume } from './audio.js';
+import { initAudio, toggleMute, setListener, setVolume, setAudioPaused } from './audio.js';
+import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, bindText } from './input.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
 import { updateGrabFx, rotateHeld } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
@@ -68,15 +69,10 @@ G.player = new Player();
 G.player.respawn();
 
 // ---------------------------------------------------------------- input
-const keys = new Set();
-const taps = new Set();
-const input = {
-  lookX: 0, lookY: 0, mouseDown: false,
-  held: (c) => keys.has(c),
-  tap: (c) => taps.has(c),
-};
+// Keys / buttons go through input.js, which maps them to actions (rebindable).
 let playing = false;
 let lockFailed = false;
+const isLocked = () => document.pointerLockElement === canvas;
 
 function requestLock() {
   if (lockFailed) return;
@@ -95,28 +91,31 @@ function start() {
 }
 document.getElementById('start').addEventListener('click', start);
 document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === canvas;
-  document.getElementById('paused').classList.toggle('show', playing && !locked && !UI.menuOpen && !lockFailed);
-  if (!locked) { input.mouseDown = false; }
+  if (!isLocked()) clearInput();
+  updatePausedOverlay();
 });
-document.addEventListener('pointerlockerror', () => { lockFailed = true; document.getElementById('paused').classList.remove('show'); });
+document.addEventListener('pointerlockerror', () => { lockFailed = true; updatePausedOverlay(); });
 document.getElementById('paused').addEventListener('click', () => { requestLock(); });
+function updatePausedOverlay() {
+  document.getElementById('paused').classList.toggle('show', playing && !isLocked() && !UI.menuOpen && !lockFailed);
+}
+G.updatePausedOverlay = updatePausedOverlay;
 
 canvas.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return; // only plain clicks — no right-click / two-finger click needed
   if (!playing) return;
-  if (document.pointerLockElement !== canvas && !lockFailed) { requestLock(); return; }
+  if (!isLocked() && !lockFailed) { if (e.button === 0) requestLock(); return; }
   initAudio();
-  input.mouseDown = true;
-  const t = currentTool();
-  if (t.down) t.down();
-  if (t.id !== 'fling') G.player.kick = Math.max(G.player.kick || 0, 0.25);
+  press('Mouse' + e.button);
+  e.preventDefault();
 });
-window.addEventListener('mouseup', (e) => { if (e.button === 0) input.mouseDown = false; });
+window.addEventListener('mouseup', (e) => release('Mouse' + e.button));
+// rebinding a mouse button from the menu
+window.addEventListener('mousedown', (e) => { if (capturing() && e.target !== canvas) { e.preventDefault(); e.stopPropagation(); press('Mouse' + e.button); } }, true);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('wheel', (e) => { if (playing && (isLocked() || lockFailed)) { e.preventDefault(); addWheel(e.deltaY); } }, { passive: false });
 document.addEventListener('mousemove', (e) => {
   if (!playing || UI.menuOpen) return;
-  if (document.pointerLockElement === canvas || lockFailed) {
+  if (isLocked() || lockFailed) {
     // clamp spikes (some browsers report a huge jump right after locking)
     const mx = Math.max(-200, Math.min(200, e.movementX)), my = Math.max(-200, Math.min(200, e.movementY));
     const sens = S.sens / 1000;
@@ -125,43 +124,42 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
-const PREVENT = new Set(['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter']);
+const PREVENT = new Set(['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'F1', 'ControlLeft']);
 window.addEventListener('keydown', (e) => {
+  if (capturing()) { e.preventDefault(); press(e.code); return; }
+  const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+  if (typing) {
+    if (e.code === 'Escape' || e.code === 'Tab') { e.preventDefault(); e.target.blur(); if (G.onTypingEscape && G.onTypingEscape(e.target)) return; if (UI.menuOpen) closeMenu(); }
+    return;
+  }
   if (PREVENT.has(e.code)) e.preventDefault();
   if (e.repeat) return;
   if (!playing) { if (e.code === 'Enter' || e.code === 'Space') start(); return; }
-  keys.add(e.code); taps.add(e.code);
-  const typing = e.target && e.target.tagName === 'INPUT';
-  if (e.code === 'Tab' || (e.code === 'KeyB' && !typing)) { if (UI.menuOpen) closeMenu(); else openMenu(); return; }
   if (e.code === 'Escape' && UI.menuOpen) { closeMenu(); return; }
-  if (UI.menuOpen) return;
-  if (/^Digit[0-9]$/.test(e.code)) { const n = +e.code.slice(5); selectSlot(n === 0 ? 9 : n - 1); }
-  if (e.code === 'KeyQ') cycleTool(-1);
-  if (e.code === 'KeyE') cycleTool(1);
-  if (e.code === 'KeyN') { G.player.flying = !G.player.flying; toast(G.player.flying ? 'Fly mode ON (Space up, Shift down)' : 'Fly mode OFF'); }
-  if (e.code === 'KeyG') { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); }
-  if (e.code === 'KeyM') toast(toggleMute() ? 'Muted' : 'Sound on');
-  if (e.code === 'KeyH') openMenu('help');
-  if (e.code === 'KeyC') { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
-  if (e.code === 'KeyP') { loadMap(G.mapId); toast('Map reset'); }
-  if (e.code === 'KeyL') { setSetting('quality', S.quality === 'high' ? 'low' : 'high'); toast(S.quality === 'high' ? 'Graphics: high' : 'Graphics: low (faster)'); }
-  if (e.code === 'KeyU') undoSpawn();
-  if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
-    setSetting('sens', Math.min(12, Math.max(0.3, +(S.sens * (e.code === 'BracketLeft' ? 0.85 : 1.18)).toFixed(2))));
-    toast(`Mouse sensitivity: ${S.sens.toFixed(1)}`);
-  }
-  if (e.code === 'Enter') { input.mouseDown = true; const t = currentTool(); if (t.down) t.down(); }
+  initAudio();
+  press(e.code);
 });
-window.addEventListener('keyup', (e) => {
-  keys.delete(e.code);
-  if (e.code === 'Enter') input.mouseDown = false;
-});
-window.addEventListener('blur', () => { keys.clear(); input.mouseDown = false; });
+window.addEventListener('keyup', (e) => release(e.code));
+window.addEventListener('blur', () => clearInput());
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  needRender = true;
 });
+
+// ---------------------------------------------------------------- pause
+// Single player: the menu, a released mouse or a hidden tab freeze EVERYTHING
+// (physics, people, fire, timers, particles, sound) and stop redrawing.
+// In a multiplayer room the world keeps going for everyone else.
+let needRender = true;
+G.requestRender = () => { needRender = true; };
+function isPaused() {
+  if (document.hidden) return true;
+  if (G.net && G.net.active) return false;
+  if (!playing) return true;
+  return UI.menuOpen || (!isLocked() && !lockFailed);
+}
 
 // settings → engine
 let lastQuality = null;
@@ -172,8 +170,9 @@ onSetting('quality', (q) => {
   lastQuality = q;
 });
 onSetting('volume', (v) => setVolume(v));
-onSetting('time', (t) => applyTime(t));
+onSetting('time', (t) => { applyTime(t); needRender = true; });
 onSetting('theme', (t) => document.body.classList.toggle('light', t === 'light'));
+onSetting('fov', (f) => { camera.fov = f; camera.updateProjectionMatrix(); needRender = true; });
 applyAll();
 
 // undo: removes the last thing you spawned (U)
@@ -193,31 +192,82 @@ G.player.setToolColor(currentTool().color);
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
 const _right = new THREE.Vector3();
+let wasPaused = false;
+
+// keys that work any time (also while paused / in the menu)
+function globalActions() {
+  if (input.tap('menu')) { if (UI.menuOpen) closeMenu(); else openMenu(); }
+  if (input.tap('help') && !UI.menuOpen) openMenu('help');
+  if (input.tap('mute')) toast(toggleMute() ? 'Muted' : 'Sound on');
+}
+
+// gameplay keys (only while actually playing)
+function gameActions(dt) {
+  for (let i = 0; i < 10; i++) if (input.tap('slot' + (i + 1))) selectSlot(i);
+  if (input.tap('prevTool')) cycleTool(-1);
+  if (input.tap('nextTool')) cycleTool(1);
+  if (input.tap('fly')) { G.player.flying = !G.player.flying; toast(G.player.flying ? `Fly mode ON (${bindText('jump', 1)} up, ${bindText('sprint', 1)} down)` : 'Fly mode OFF'); }
+  if (input.tap('slowmo')) { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); }
+  if (input.tap('clear')) { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
+  if (input.tap('resetMap')) { loadMap(G.mapId); toast('Map reset'); }
+  if (input.tap('quality')) { setSetting('quality', S.quality === 'high' ? 'low' : 'high'); toast(S.quality === 'high' ? 'Graphics: high' : 'Graphics: low (faster)'); }
+  if (input.tap('undo')) undoSpawn();
+  if (input.tap('photo')) { document.body.classList.toggle('photo'); }
+  if (input.tap('sensDown') || input.tap('sensUp')) {
+    setSetting('sens', Math.min(12, Math.max(0.3, +(S.sens * (input.tap('sensDown') ? 0.85 : 1.18)).toFixed(2))));
+    toast(`Mouse sensitivity: ${S.sens.toFixed(1)}`);
+  }
+  // scroll wheel / two-finger scroll
+  const w = input.wheel();
+  if (w) {
+    const holding = G.grab && currentTool().id === 'fling';
+    if (holding && ctl.wheel !== 'off') G.reelBy && G.reelBy(w * 0.7);
+    else if (ctl.wheel === 'smart') selectSlot((UI.slot + (w > 0 ? 1 : -1) + 10) % 10);
+  }
+  // tool use
+  const tool = currentTool();
+  if (input.tap('use')) {
+    if (tool.down) tool.down();
+    if (tool.id !== 'fling') G.player.kick = Math.max(G.player.kick || 0, 0.25);
+  }
+  if (input.tap('alt') && tool.alt) tool.alt();
+  if (tool.update) tool.update(dt, input);
+  if (input.held('use') && tool.held) tool.held(dt);
+}
+
 function frame() {
   requestAnimationFrame(frame);
   const rdt = Math.min(clock.getDelta(), 0.05);
+  globalActions();
+  const paused = isPaused();
+  G.paused = paused;
+  if (paused) {
+    // frozen: no simulation, no sound; draw only if something visible changed
+    if (!wasPaused) { setAudioPaused(true); wasPaused = true; needRender = true; }
+    updateToast(rdt);
+    input.lookX = 0; input.lookY = 0;
+    endFrame();
+    if (needRender) { needRender = false; renderer.render(scene, camera); }
+    return;
+  }
+  if (wasPaused) { setAudioPaused(false); wasPaused = false; }
   const dt = rdt * G.timeScale;
   G.time += dt;
 
   const active = playing && !UI.menuOpen;
-  const k = (c) => active && keys.has(c);
-  // holding R with the Fling Line: the mouse turns the held object instead of the camera
-  if (active && keys.has('KeyR') && G.grab && currentTool().id === 'fling' && rotateHeld(input.lookX, input.lookY)) { input.lookX = 0; input.lookY = 0; }
+  const k = (a) => active && input.held(a);
+  // holding "rotate" with the Fling Line: the mouse turns the held object instead of the camera
+  if (active && input.held('rotate') && G.grab && currentTool().id === 'fling' && rotateHeld(input.lookX, input.lookY)) { input.lookX = 0; input.lookY = 0; }
   const pin = {
-    f: k('KeyW'), b: k('KeyS'), l: k('KeyA'), r: k('KeyD'),
-    sprint: k('ShiftLeft') || k('ShiftRight'), sprintDown: k('ShiftLeft') || k('ShiftRight'),
-    jump: active && (taps.has('Space')), jumpHeld: k('Space'),
-    lookX: input.lookX + ((k('ArrowLeft') ? -1 : 0) + (k('ArrowRight') ? 1 : 0)) * 2.2 * rdt,
-    lookY: input.lookY + ((k('ArrowUp') ? -1 : 0) + (k('ArrowDown') ? 1 : 0)) * 1.6 * rdt,
+    f: k('forward'), b: k('back'), l: k('left'), r: k('right'),
+    sprint: k('sprint'), sprintDown: k('sprint'), crouch: k('crouch'),
+    jump: active && input.tap('jump'), jumpHeld: k('jump'),
+    lookX: input.lookX + ((k('lookLeft') ? -1 : 0) + (k('lookRight') ? 1 : 0)) * 2.2 * rdt,
+    lookY: input.lookY + ((k('lookUp') ? -1 : 0) + (k('lookDown') ? 1 : 0)) * 1.6 * rdt,
   };
   input.lookX = 0; input.lookY = 0;
 
-  // tools
-  const tool = currentTool();
-  if (active) {
-    if (tool.update) tool.update(dt, input);
-    if (input.mouseDown && tool.held) tool.held(dt);
-  }
+  if (active) gameActions(dt);
 
   // physics
   world.step(1 / 60, dt, 4);
@@ -239,6 +289,7 @@ function frame() {
   updateToast(rdt);
   updateHud(rdt);
   updateGrabFx(dt);
+  if (G.afterFrame) G.afterFrame(dt, rdt);
   setListener(camera.position, _right.set(1, 0, 0).applyQuaternion(camera.quaternion));
 
   // shadows follow the player
@@ -247,9 +298,10 @@ function frame() {
   sun.position.set(pp.x + so[0], pp.y + so[1], pp.z + so[2]);
   sun.target.position.set(pp.x, pp.y, pp.z);
 
-  taps.clear();
+  endFrame();
   renderer.render(scene, camera);
+  needRender = false;
 }
 frame();
 window.__G = G; // handy for debugging in the console
-window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input };
+window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input, isPaused };

@@ -7,6 +7,8 @@ import { spawnDummy } from '../dummy.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
 import { aimHit, aimPoint, dummyOf } from './common.js';
+import { bindText } from '../input.js';
+function cancelPending() { if (pending) { pending = null; toast('Cancelled'); } }
 
 function cool(tool, dt) { tool.cd = Math.max(0, (tool.cd || 0) - dt); }
 
@@ -57,24 +59,26 @@ let pending = null;
 let pendStrand = null;
 function twoClickUpdate(tool, input, color) {
   if (!pendStrand) pendStrand = new Strand(color, 0.025, 8, true);
-  if (input.tap('KeyF')) { pending = null; toast('Cancelled'); }
   if (pending && pending.tool === tool.id) {
     const a = tv(pending.body.pointToWorldFrame(pending.local));
     const h = aimHit(80);
     pendStrand.setColor(color);
     pendStrand.update(a, h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 10), 0.3);
-    G.toolNote = 'Click the second point (F to cancel)';
+    G.toolNote = `Click the second point (${bindText('alt', 1)} to cancel)`;
   } else { pendStrand.hide(); G.toolNote = null; }
 }
 
 export const buildTools = [
   {
-    id: 'spawner', name: 'Spawner', icon: '🧰', color: 0x3a86ff, hint: 'Click: spawn the selected item · T: next item · TAB: pick from menu',
+    id: 'spawner', name: 'Spawner', icon: '🧰', color: 0x3a86ff, get hint() { return `Click: spawn the selected item · ${bindText('alt', 1)}: turn it 45° · ${bindText('nextItem', 1)}: next item · ${bindText('menu', 1)}: pick from menu`; },
+    desc: 'Puts the selected thing where you aim. A see-through preview shows where it goes; big builds turn red if something is in the way.',
+    turn: 0,
+    alt() { this.turn = (this.turn + Math.PI / 4) % (Math.PI * 2); },
     // where (and how rotated) the current item would appear
     placement() {
       const def = ITEMS[G.spawnId];
       const h = aimPoint(40, 7);
-      const yaw = G.player.yaw + Math.PI;
+      const yaw = G.player.yaw + Math.PI + (this.turn || 0);
       const p = h.point.clone();
       const quat = def.rot ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...def.rot)) : new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
       if (!def.dummy && !def.prefab) {
@@ -105,7 +109,7 @@ export const buildTools = [
     },
     update(dt, input) {
       cool(this, dt);
-      if (input.tap('KeyT')) {
+      if (input.tap('nextItem')) {
         const list = CATALOG;
         const i = list.findIndex((d) => d.id === G.spawnId);
         G.spawnId = list[(i + 1) % list.length].id;
@@ -187,6 +191,7 @@ export const buildTools = [
       pending = null;
       sfx.grab();
     },
+    alt() { cancelPending(); },
     update(dt, input) { twoClickUpdate(this, input, 0xe8dcc0); },
     unequip() { pending = null; if (pendStrand) pendStrand.hide(); G.toolNote = null; },
   },
@@ -204,6 +209,7 @@ export const buildTools = [
       pending = null;
       sfx.weld ? sfx.weld() : sfx.crack();
     },
+    alt() { cancelPending(); },
     update(dt, input) { twoClickUpdate(this, input, 0xffa62b); },
     unequip() { pending = null; if (pendStrand) pendStrand.hide(); G.toolNote = null; },
   },

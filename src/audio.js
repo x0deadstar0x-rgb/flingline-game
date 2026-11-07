@@ -33,6 +33,14 @@ export function initAudio() {
   } catch (e) { ctx = null; }
 }
 
+// pause: freeze every sound (resumes exactly where it stopped)
+let pausedAudio = false;
+export function setAudioPaused(p) {
+  if (!ctx || p === pausedAudio) return;
+  pausedAudio = p;
+  try { if (p) ctx.suspend(); else ctx.resume(); } catch (e) { /* ignore */ }
+}
+
 export function toggleMute() {
   muted = !muted;
   if (master) master.gain.value = muted ? 0 : 0.7 * volume;

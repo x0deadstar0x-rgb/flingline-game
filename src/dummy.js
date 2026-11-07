@@ -695,7 +695,7 @@ export class Dummy {
         if (ai.t <= 0) this.decide(feet, pp);
       }
       // say hi when you walk up to them
-      if (pp && ai.mode !== 'chat' && ai.mode !== 'wave' && G.time - ai.lastWave > 25) {
+      if (pp && (ai.mode === 'idle' || ai.mode === 'walk' || ai.mode === 'sit') && !ai.carry && G.time - ai.lastWave > 25) {
         const d = pp.distanceTo(feet);
         if (d < 7 && d > 2) {
           const look = G.aim.dir.dot(feet.clone().sub(pp).normalize());
@@ -847,6 +847,7 @@ export class Dummy {
   }
   pickUp(e) {
     const ai = this.ai;
+    if (ai.carry && ai.carry !== e) this.dropCarry();
     e.carriedBy = this;
     e.body.type = CANNON.Body.KINEMATIC;
     e.body.collisionResponse = false;
