@@ -80,7 +80,7 @@ export function updateFx(dt) {
     p.vel.y -= p.grav * dt;
     p.vel.multiplyScalar(Math.max(0, 1 - p.drag * dt));
     p.m.position.addScaledVector(p.vel, dt);
-    const fy = p.floor && G.groundAt ? G.groundAt(p.m.position.x, p.m.position.z) + 0.05 : -1e9;
+    const fy = p.floor && G.floorAt ? G.floorAt(p.m.position.x, p.m.position.y + 0.3, p.m.position.z) + 0.05 : -1e9;
     if (p.m.position.y < fy) {
       p.m.position.y = fy; p.vel.y *= -0.3; p.vel.x *= 0.6; p.vel.z *= 0.6;
     }

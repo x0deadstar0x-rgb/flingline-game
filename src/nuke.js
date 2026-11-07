@@ -14,6 +14,7 @@ import * as FX from './fx.js';
 import { sfx } from './audio.js';
 import { breakEnt, damage, ignite, detonate, unfreeze, addFirePatch } from './items.js';
 import { projectile } from './tools/common.js';
+import { buildingsNear, nukeBuilding } from './buildings.js';
 
 const blasts = [];
 
@@ -129,6 +130,7 @@ export function nukeBlast(pos, s = 1, opts = {}) {
     if (d < Rmax) b.victims.push({ d, dummy: dm });
   }
   if (G.player) b.victims.push({ d: Math.max(0, b.distAtStart - 1), player: true });
+  for (const o of buildingsNear(pos, Rmax * 0.75)) b.victims.push({ d: o.d, building: o.b });
   b.victims.sort((x, y) => x.d - y.d);
 
   // the crater: wide and fairly shallow, with scorched ground all around
@@ -182,6 +184,7 @@ G.nukeBlast = nukeBlast;
 
 function hitVictim(b, v, budget) {
   const { s, Rmax, pos } = b;
+  if (v.building) { nukeBuilding(v.building, pos, clamp(1 - v.d / (Rmax * 0.75), 0, 1), s); return 1; }
   const f = clamp(1 - v.d / Rmax, 0, 1);
   const fk = Math.pow(f, 1.5);
   const at = v.player ? G.player.pos() : v.dummy ? v.dummy.center() : tv(v.body.position);
@@ -236,8 +239,13 @@ export function updateNukes(dt) {
 
     // --- shockwave front (fast at first, slowing down)
     const rw = Rmax * (1 - Math.exp(-t * 1.25));
-    let budget = 8;
-    while (b.vi < b.victims.length && b.victims[b.vi].d <= rw) budget -= hitVictim(b, b.victims[b.vi++], budget);
+    let budget = 8, wrecked = 0;
+    while (b.vi < b.victims.length && b.victims[b.vi].d <= rw) {
+      const v = b.victims[b.vi];
+      if (v.building) { if (wrecked) break; wrecked = 1; } // one building per frame (they're big)
+      b.vi++;
+      budget -= hitVictim(b, v, budget);
+    }
     if (rw < Rmax * 0.97 && t < 4) {
       b.dustT += dt * 70 * Math.max(0.5, s);
       while (b.dustT > 1) {

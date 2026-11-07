@@ -570,7 +570,7 @@ export class Dummy {
     const feet = this.origin();
     if (feet.y < G.waterAt(feet.x, feet.z) - 0.4 || feet.y < (G.killY ?? -30)) { this.knock(null); return; }
     // safety net: never stand inside the ground
-    if (G.groundAt) { const gy = G.groundAt(feet.x, feet.z); if (gy > -1e8 && feet.y < gy - 0.35) { b.position.y = gy + 0.95 * s + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; } }
+    if (G.solidAt && G.solidAt(feet.x, feet.y + 0.35, feet.z)) { const gy = G.floorAt(feet.x, feet.y + 0.35, feet.z); b.position.y = gy + 0.95 * s + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; }
     // ground under the centre and a little ahead (so steps lift them early)
     const hs0 = Math.hypot(b.velocity.x, b.velocity.z);
     const ax = hs0 > 0.4 ? b.velocity.x / hs0 * 0.3 * s : 0, az = hs0 > 0.4 ? b.velocity.z / hs0 * 0.3 * s : 0;

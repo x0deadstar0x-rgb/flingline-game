@@ -1,13 +1,14 @@
 // Entry point: renderer, physics world, input, main loop.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, updatePopups, updateToast, toast } from './core.js';
+import { G, updatePopups, updateToast, toast, clamp } from './core.js';
 import { initAudio, toggleMute, setListener, setVolume, setAudioPaused } from './audio.js';
 import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, bindText } from './input.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
 import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import { initNuke, updateNukes } from './nuke.js';
+import { updateBuildings } from './buildings.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
@@ -52,9 +53,40 @@ sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
 G.sun = sun;
+// underground (in a cave or tunnel), daylight fades out and your headlamp comes on
+const headlamp = new THREE.SpotLight(0xfff0d8, 0, 38, 0.62, 0.55, 1.1);
+scene.add(headlamp, headlamp.target);
+let underground = 0;
+const _fwd = new THREE.Vector3();
+function updateUnderground(dt) {
+  const c = camera.position;
+  const top = G.groundAt ? G.groundAt(c.x, c.z) : -1e9;
+  const inCave = top > c.y + 0.5 && G.solidAt && !G.solidAt(c.x, c.y, c.z);
+  const want = inCave ? clamp((top - c.y - 1) / 5, 0, 1) : 0;
+  underground += (want - underground) * Math.min(1, dt * 2.5);
+  if (underground < 0.002 && want === 0) { if (headlamp.intensity) { headlamp.intensity = 0; sun.intensity = G.baseSun ?? sun.intensity; hemi.intensity = G.baseHemi ?? hemi.intensity; } return; }
+  sun.intensity = (G.baseSun ?? 2.2) * (1 - 0.92 * underground);
+  hemi.intensity = (G.baseHemi ?? 1.1) * (1 - 0.72 * underground);
+  headlamp.intensity = 70 * underground;
+  headlamp.position.copy(c);
+  headlamp.target.position.copy(c).add(_fwd.set(0, 0, -10).applyQuaternion(camera.quaternion));
+}
 
 // ---------------------------------------------------------------- physics
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+// "Who touched whom" (for collision events), kept sparse. cannon-es's default keeps a slot for
+// every PAIR of bodies and clears all of them on every step, and resizes it whenever a body is
+// added or removed: with ~1500 bodies that's a million slots and 3-6 ms per step for nothing.
+class SparsePairs {
+  constructor() { this.s = new Set(); }
+  key(a, b) { const i = a.id, j = b.id; return i > j ? i * 67108864 + j : j * 67108864 + i; }
+  get(a, b) { return this.s.has(this.key(a, b)); }
+  set(a, b, v) { if (v) this.s.add(this.key(a, b)); else this.s.delete(this.key(a, b)); }
+  reset() { this.s.clear(); }
+  setNumObjects() {}
+}
+world.collisionMatrix = new SparsePairs();
+world.collisionMatrixPrevious = new SparsePairs();
 world.broadphase = new VoxelBroadphase(world);
 world.allowSleep = true;
 world.solver.iterations = 10;
@@ -337,6 +369,15 @@ function frame() {
 
   // physics. Lag guard: under heavy load it takes bigger (fewer) steps, so the world keeps real
   // speed instead of turning into slow motion or piling up work
+  // ground physics where things are moving (built on demand)
+  if (G.ensureGround) {
+    for (const b of world.bodies) {
+      if (b.type !== CANNON.Body.DYNAMIC || b.sleepState === CANNON.Body.SLEEPING) continue;
+      if (b.aabbNeedsUpdate) b.updateAABB();
+      const m = 1.5 + (Math.abs(b.velocity.x) + Math.abs(b.velocity.z)) * dt * 3;
+      G.ensureGround(b.aabb.lowerBound.x - m, b.aabb.lowerBound.z - m, b.aabb.upperBound.x + m, b.aabb.upperBound.z + m);
+    }
+  }
   const tStep = performance.now();
   const heavy = physLoad > 12;
   world.step(heavy ? 1 / 40 : 1 / 60, dt, heavy ? 2 : 3);
@@ -358,6 +399,8 @@ function frame() {
   updateMap(dt);
   updateFx(dt);
   updateNukes(dt);
+  updateBuildings(dt);
+  updateUnderground(rdt);
   updatePopups(rdt);
   updateToast(rdt);
   updateHud(rdt);

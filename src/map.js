@@ -7,7 +7,9 @@ import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope, addRop
 import { spawnDummy } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
-import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater } from './terrain.js';
+import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater, addGridStatic } from './terrain.js';
+import { setBuildingGroup, clearBuildings } from './buildings.js';
+import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT } from './city.js';
 
 let mapGroup = null;
 let mapBodies = [];
@@ -40,7 +42,9 @@ function addStatic(shape, pos, quat, mesh) {
   b.addShape(shape);
   b.position.set(pos.x, pos.y, pos.z);
   if (quat) b.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+  b.isGridStatic = true; // found through the scenery grid, not the general pair search
   G.world.addBody(b);
+  addGridStatic(b);
   mapBodies.push(b);
   if (mesh) {
     mesh.position.copy(pos);
@@ -323,14 +327,40 @@ function hillsHeight(x, z) {
   h += 26 * Math.exp(-((x + 45) ** 2 + (z + 20) ** 2) / 380);
   h -= 11 * Math.exp(-((x + 5) ** 2 + (z + 5) ** 2) / 420);
   const edge = Math.max(Math.abs(x), Math.abs(z));
-  if (edge > 90) h += (edge - 90) * 1.2;
+  if (edge > 115) h += (edge - 115) * 1.2;
   const sp = Math.hypot(x, z - 50);
   if (sp < 16) h = h * (sp / 16) + 2 * (1 - sp / 16);
   return h + 2;
 }
+// a tunnel through the ground: points [x, y, z, radius]
+function tunnel(stamp, pts) {
+  for (let s = 0; s < pts.length - 1; s++) {
+    const a = pts[s], b = pts[s + 1];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), n = Math.max(1, Math.ceil(L / 0.6));
+    for (let q = 0; q <= n; q++) {
+      const t = q / n, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t, z = a[2] + (b[2] - a[2]) * t;
+      stamp(x, y, z, (a[3] + (b[3] - a[3]) * t) * (0.92 + 0.16 * Math.sin(x * 1.3 + z * 0.7)));
+    }
+  }
+}
+// glowing crystals growing out of a cave floor
+const crystalGeo = new THREE.ConeGeometry(0.2, 1, 5);
+function crystals(x, yHint, z, s, color) {
+  const fy = G.floorAt ? G.floorAt(x, yHint, z) : -1e9;
+  if (fy < -1e8) return;
+  const m0 = matCache['cr' + color] || (matCache['cr' + color] = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, flatShading: true, roughness: 0.25 }));
+  for (let q = 0; q < 5; q++) {
+    const h = (0.5 + r01() * 1.3) * s;
+    const m = new THREE.Mesh(crystalGeo, m0);
+    m.scale.set(s, h, s);
+    m.position.set(x + rr(-0.5, 0.5) * s, fy + h / 2 - 0.08, z + rr(-0.5, 0.5) * s);
+    m.rotation.set(rr(-0.4, 0.4), rr(0, 3), rr(-0.4, 0.4));
+    mapGroup.add(m);
+  }
+}
 function buildHills() {
   srand(23);
-  makeTerrain({ W: 240, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
+  makeTerrain({ W: 300, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
   water1(-1);
   const gh = groundHeight;
   const cx = 45, cz = -35, cy = gh(cx, cz);
@@ -351,11 +381,11 @@ function buildHills() {
     for (let i = 0; i < 6; i++) put('duck', -5 + rand(-8, 8), -0.6, -5 + rand(-8, 8));
   });
   pad(-8, gh(-8, 54), 54, new THREE.Vector3(-12, 22, -30), 0xffb703);
-  for (let i = 0; i < 110; i++) {
-    const x = rr(-95, 95), z = rr(-95, 95), y = gh(x, z);
+  for (let i = 0; i < 170; i++) {
+    const x = rr(-118, 118), z = rr(-118, 118), y = gh(x, z);
     if (y > 1 && y < 15 && Math.hypot(x, z - 50) > 14 && Math.hypot(x - 45, z + 35) > 14) tree(x, y - 0.2, z, rr(0.8, 1.5));
   }
-  for (let i = 0; i < 30; i++) { const x = rr(-95, 95), z = rr(-95, 95); rock(x, gh(x, z), z, rr(0.6, 2)); }
+  for (let i = 0; i < 45; i++) { const x = rr(-118, 118), z = rr(-118, 118); rock(x, gh(x, z), z, rr(0.6, 2)); }
   for (let i = 0; i < 12; i++) { const x = rand(-30, 30), z = rand(20, 60); spawnDummy(new THREE.Vector3(x, gh(x, z) + 0.1, z), i % 6 === 5 ? 'tiny' : 'normal'); }
   spawnDummy(new THREE.Vector3(cx, cy + 0.3, cz), 'big');
 }
@@ -387,41 +417,82 @@ function buildSky() {
 // ---- City: destructible buildings made of concrete blocks
 function buildCity() {
   srand(41);
-  const road = (v) => Math.abs(((v % 40) + 40) % 40 - 20) > 14; // roads every 40 m
+  const blocks = planCity(r01);
+  const blockAt = (x, z) => { const gx = Math.round(x / PITCH), gz = Math.round(z / PITCH); return blocks.find((k) => k.gx === gx && k.gz === gz) || null; };
+  const loc = (v) => { const m = ((v % PITCH) + PITCH * 1.5) % PITCH - PITCH / 2; return m; }; // -24..24 inside a block
+  const ROADH = PITCH / 2 - ROAD / 2; // past this (from a block's centre) it's road
+  const underBuilding = (x, z) => { const blk = blockAt(x, z); return blk && lotAt([blk], x, z); };
   makeTerrain({
-    W: 200, es: 2, bedrock: -6, height: () => 0,
-    color: (h, x, z) => (road(x) || road(z) ? 0x3a3d42 : (Math.abs(((x % 40) + 40) % 40 - 20) > 12 || Math.abs(((z % 40) + 40) % 40 - 20) > 12) ? 0xb9b4aa : 0x6aa857),
+    W: 264, es: 2, bedrock: -6,
+    height: (x, z) => (underBuilding(x, z) ? -0.5 : 0),
+    color: (h, x, z) => {
+      const lx = loc(x), lz = loc(z), ax = Math.abs(lx), az = Math.abs(lz);
+      const rx = ax > ROADH, rz = az > ROADH; // on a road running along z / along x
+      if (rx || rz) {
+        if (rx && rz) return 0x34373c; // crossing
+        const across = rx ? lz : lx, along = rx ? z : x, off = rx ? ax : az;
+        if (Math.abs(across) > LOT && Math.abs(across) <= LOT + WALK) return (Math.floor((rx ? x : z) * 2) & 1) ? 0xd8d8d0 : 0x34373c; // zebra crossing
+        if (off > PITCH / 2 - 0.3 && (Math.floor(along / 3) & 1)) return 0xe0b43a; // dashed centre line
+        if (off > ROADH && off < ROADH + 0.5) return 0xc9c9c2; // edge line
+        return 0x34373c;
+      }
+      if (ax > LOT || az > LOT) return ((Math.floor(x / 2) + Math.floor(z / 2)) & 1) ? 0xb5b0a6 : 0xaba69c; // sidewalk
+      const blk = blockAt(x, z);
+      const use = blk ? blk.use : 'plaza';
+      if (h < -0.1) return 0x8a8a84; // under a building
+      if (use === 'park') return (Math.abs(lx) < 1.5 || Math.abs(lz) < 1.5 || Math.abs(Math.abs(lx) - Math.abs(lz)) < 1.2) ? 0xc2b38f : ((Math.floor(x) + Math.floor(z * 1.3)) % 7 === 0 ? 0x6aa857 : 0x5f9e4a);
+      if (use === 'parking') return (Math.abs(lz) < 3) ? 0x45484d : ((Math.abs(lx % 3) < 0.25 && Math.abs(lz) > 4) ? 0xe2e2da : 0x45484d);
+      if (use === 'plaza') return ((Math.floor(x / 1.5) + Math.floor(z / 1.5)) & 1) ? 0xd2cbbb : 0xc4bdad;
+      return ((Math.floor(x) + Math.floor(z)) & 1) ? 0xbfb9ac : 0xb5afa2;
+    },
   });
-  // background skyline (solid)
-  for (let i = 0; i < 26; i++) {
-    const a = (i / 26) * Math.PI * 2, r = 110 + rr(0, 30), h = rr(25, 70);
-    sbox(rr(12, 20), h, rr(12, 20), Math.cos(a) * r, h / 2, Math.sin(a) * r, [0x8b95a1, 0x6e7781, 0xa3acb6, 0x5f6973][i % 4]);
+  setBuildingGroup(mapGroup);
+  buildCityBlocks(blocks, r01);
+  // far skyline beyond the edge (just scenery)
+  for (let i = 0; i < 34; i++) {
+    const a = (i / 34) * Math.PI * 2 + rr(-0.05, 0.05), r = rr(170, 215), h = rr(30, 95), w = rr(14, 26);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, rr(14, 26)), smat([0x8b95a1, 0x6e7781, 0xa3acb6, 0x5f6973, 0x7d8a99][i % 5]));
+    m.rotation.y = rr(0, 3);
+    deco(m, Math.cos(a) * r, h / 2 - 1, Math.sin(a) * r);
   }
+  // plaza: fountain, trees, benches, a launch pad
+  scyl(4.2, 0.7, 0, 0.35, -9, 0xbdb6a6, null, 16);
+  const pool = new THREE.Mesh(new THREE.CylinderGeometry(3.7, 3.7, 0.1, 16), new THREE.MeshStandardMaterial({ color: 0x4aa3d8, roughness: 0.2, metalness: 0.1 }));
+  deco(pool, 0, 0.66, -9);
+  scyl(0.5, 2.4, 0, 1.6, -9, 0xd8d2c4, null, 8);
+  for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10], [-12, 0], [12, 0]]) tree(x, 0, z, 1.1);
+  pad(0, 0, 4, new THREE.Vector3(0, 30, 0));
   sleepy(() => {
-    const blocks = [[0, 0], [40, 0], [-40, 0], [0, -40], [40, -40], [-40, -40], [40, 40], [-40, 40]];
-    blocks.forEach(([bx, bz], k) => {
-      if (k === 0) return; // central plaza
-      if (k % 3 === 0) buildPrefab('skyscraper', new THREE.Vector3(bx, 0, bz), 0, false);
-      else if (k % 3 === 1) { stack('concrete_big', bx - 4, 0, bz, 3, 3, 4 + (k % 3), 2); stack('concrete_big', bx + 6, 0, bz + 4, 2, 2, 3, 2); }
-      else { buildPrefab('house', new THREE.Vector3(bx - 5, 0, bz - 3), 0, false); buildPrefab('house', new THREE.Vector3(bx + 5, 0, bz + 4), Math.PI, false); }
-    });
-    // plaza fountain-ish + props
-    buildPrefab('arch', new THREE.Vector3(0, 0, -6), 0, false);
-    for (let i = 0; i < 6; i++) put('car', -20 + rand(-1, 1), 0, -30 + i * 10, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2) });
-    for (let i = 0; i < 5; i++) put('car', -30 + i * 12, 0, 20, {});
-    for (let i = 0; i < 14; i++) put('cone', rand(-60, 60), 0, 20 + rand(-1.5, 1.5));
-    for (let i = 0; i < 10; i++) put('lamp', -60 + i * 13, 0, 13.5);
-    for (let i = 0; i < 5; i++) put('bench', -52 + i * 26, 0, 14.5); // facing the street
-    for (let i = 0; i < 6; i++) put('barrier', 18 + rand(-1, 1), 0, -20 + i * 3);
-    for (let i = 0; i < 5; i++) put('mailbox', rand(-12, 12), 0, rand(-12, 12));
-    put('vending', 6, 0, 6); put('vending', 7.3, 0, 6);
-    for (let i = 0; i < 4; i++) put('bin', -6 + i * 4, 0, 8);
-    pallets(-4, 0, 12, 3);
-    buildPrefab('pallets', new THREE.Vector3(10, 0, -10), 0, false);
+    for (const [x, z, r] of [[-6, -14, 0], [6, -14, 0], [-14, -6, Math.PI / 2], [14, -6, -Math.PI / 2]]) put('bench', x, 0, z, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r) });
+    put('vending', 13, 0, 13); put('vending', 14.3, 0, 13);
+    for (let i = 0; i < 4; i++) put('bin', -13 + i * 0.1, 0, 12 - i * 8);
+    // street lamps round the plaza and along the main streets
+    for (let i = -4; i <= 4; i++) { if (i === 0) continue; put('lamp', i * 11, 0, 16.8); put('lamp', i * 11, 0, -16.8); }
+    for (let i = -4; i <= 4; i += 2) { if (i === 0) continue; put('lamp', 16.8, 0, i * 11); put('lamp', -16.8, 0, i * 11); }
+    // parked cars along the streets
+    for (let i = 0; i < 18; i++) {
+      const along = i % 2 === 0, side = (i >> 1) % 2 ? 1 : -1;
+      const road = (Math.floor(r01() * 4) - 2) * PITCH + PITCH / 2; // one of the roads
+      const t = rr(-90, 90);
+      const off = road + side * (ROAD / 2 - 1.4);
+      if (along) put('car', t, 0, off, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2 + (side > 0 ? Math.PI : 0)) });
+      else put('car', off, 0, t, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), side > 0 ? Math.PI : 0) });
+    }
+    for (let i = 0; i < 8; i++) put('mailbox', rr(-90, 90), 0, (r01() < 0.5 ? -1 : 1) * 16.5 + (r01() < 0.5 ? 48 : 0));
+    // road works
+    for (let i = 0; i < 8; i++) put('cone', 30 + i * 2.2, 0, PITCH / 2 + 2);
+    for (let i = 0; i < 4; i++) put('barrier', 28 + i * 3.2, 0, PITCH / 2 - 2);
   });
-  pad(0, 0, 0, new THREE.Vector3(0, 30, 0));
-  sbox(8, 0.5, 20, 60, 3, 20, 0xffbe0b, null, [0.3, 0, 0]);
-  crowd(16, 0, 10, 20); crowd(3, 0, -20, 10, 0, ['zombie']);
+  // parks and car parks
+  for (const blk of blocks) {
+    if (blk.use === 'park') {
+      for (let i = 0; i < 9; i++) { const x = blk.cx + rr(-12, 12), z = blk.cz + rr(-12, 12); if (Math.abs(x - blk.cx) > 2.5 && Math.abs(z - blk.cz) > 2.5) tree(x, 0, z, rr(0.9, 1.5)); }
+      sleepy(() => { put('bench', blk.cx + 4, 0, blk.cz + 2.5); put('bench', blk.cx - 4, 0, blk.cz - 2.5, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI) }); put('bin', blk.cx + 2.2, 0, blk.cz + 2.2); });
+    } else if (blk.use === 'parking') {
+      sleepy(() => { for (let i = 0; i < 8; i++) if (r01() < 0.75) put('car', blk.cx - 10.5 + i * 3, 0, blk.cz + (i % 2 ? 7 : -7), { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), i % 2 ? Math.PI : 0) }); });
+    }
+  }
+  crowd(14, 0, 2, 13); crowd(6, 0, 20, 30); crowd(2, 48, 20, 6, 0, ['zombie']);
 }
 
 // ---- Desert canyon with a river, mesas and cacti
@@ -549,9 +620,9 @@ function buildPlayground() {
 
 export const MAPS = [
   { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
-  { id: 'city', name: 'City', icon: '🏙️', desc: 'Concrete buildings you can bring down, cars, zombies', build: buildCity, spawn: [0, 1.2, 30], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 80, 260], killY: -30, water: -1000, walk: 90 },
+  { id: 'city', name: 'City', icon: '🏙️', desc: 'Huge towers made of blocks: climb the stairs to the roof, blow out the windows, bring them down', build: buildCity, spawn: [0, 1.2, 12], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 110, 420], killY: -30, water: -1000, walk: 118 },
   { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
-  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 90, 300], killY: -30, water: -1, walk: 85 },
+  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Big rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 100, 360], killY: -30, water: -1, walk: 110 },
   { id: 'desert', name: 'Desert Canyon', icon: '🏜️', desc: 'Mesas, a river canyon, cacti, oil drums & a minefield', build: buildDesert, spawn: [0, 4, 50], sky: [0x6aa8e8, 0xffd9a8], fog: [0xffd9a8, 90, 320], killY: -30, water: -2.5, walk: 85 },
   { id: 'snow', name: 'Snowy Peaks', icon: '❄️', desc: 'Slippery frozen lake, igloos, snowmen, a big mountain', build: buildSnow, spawn: [0, 5, 50], sky: [0x9cc3e6, 0xf2f6fa], fog: [0xf2f6fa, 70, 260], killY: -30, water: -1000, walk: 85 },
   { id: 'playground', name: 'Playground', icon: '🛝', desc: 'Swings, see-saws, a slide, trampolines & a ball pit', build: buildPlayground, spawn: [0, 1.2, 50], sky: [0x5bb1ff, 0xfff0d6], fog: [0xfff0d6, 90, 300], killY: -30, water: -1000, walk: 55 },
@@ -569,6 +640,7 @@ export function clearWorld() {
   G.projectiles.length = 0;
   for (const h of G.blackholes) G.scene.remove(h.mesh);
   G.blackholes.length = 0;
+  G.cubeSinks = [];
   G.firePatches = [];
   G.timers.length = 0;
   G.burning = 0;
@@ -583,7 +655,7 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; clearTerrain(); clearCubes(); G.groundAt = null;
+  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); G.groundAt = null;
   if (G.clearNukes) G.clearNukes();
   G.mapId = m.id;
   G.map = m;
@@ -623,6 +695,7 @@ export function applyTime(mode) {
   G.timeOfDay = mode;
   if (G.sun) { G.sun.intensity = t.sun; G.sun.color.set(t.sunCol); G.sunOffset = t.sunPos; }
   if (G.hemi) { G.hemi.intensity = t.hemi; G.hemi.color.set(t.hemiSky); G.hemi.groundColor.set(t.hemiGround); }
+  G.baseSun = t.sun; G.baseHemi = t.hemi;
   if (G.renderer) G.renderer.toneMappingExposure = t.exposure;
   G.baseExposure = t.exposure;
   const m = G.map;

@@ -216,14 +216,15 @@ export const buildTools = [
     unequip() { pending = null; if (pendStrand) pendStrand.hide(); G.toolNote = null; },
   },
   {
-    id: 'balloon', name: 'Balloon Tool', icon: '🎈', color: 0xff3b3b, hint: 'Click: tie a balloon on. Enough balloons lift anything!',
+    id: 'balloon', name: 'Balloon Tool', icon: '🎈', color: 0xff3b3b, hint: 'Click: tie a big balloon on. One lifts a person, a few lift a car!',
+    desc: 'Super balloons: each one pulls up with about 140 kg of lift, right where you tie it. Tie several on a car, a crate pile or a person and watch them go.',
     down() {
       if (this.cd > 0) return; this.cd = 0.15;
       const a = pickAnchor();
       if (!a) return;
       const p = a.point.clone().add(new THREE.Vector3(rand(-0.5, 0.5), 3, rand(-0.5, 0.5)));
       const be = spawnItem('balloon', p, { spawned: true });
-      be.lift = 160;
+      be.lift = 1400;
       addRope(a.body, a.local, be.body, new CANNON.Vec3(0, -0.5, 0), 2.8, 0xffffff);
       a.body.wakeUp();
       sfx.pop();

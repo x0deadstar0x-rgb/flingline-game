@@ -41,7 +41,15 @@ export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
       cubeBurst(hit.point, dmg >= 60 ? 6 : 2, [c, 0x6b4f35], dmg >= 60 ? 6 : 3.5, dmg >= 60 ? 0.2 : 0.1);
       FX.smoke(hit.point, 1, 0x9a8a6a, 0.25);
       if (dmg >= 60 && G.crater) carveTerrain(hit.point, 0.7, { sink: 0.3 });
-    } else FX.debris(hit.point, 0x8a7a5a, 3, 0.08, 3);
+    } else if (hit.body && hit.body.isBuilding && G.chipBuilding) G.chipBuilding(hit, dmg);
+    else {
+      if (hit.body && hit.body.type === CANNON.Body.DYNAMIC) { // a falling piece of building
+        const J = Math.min(hit.body.mass, 15) * imp;
+        hit.body.applyImpulse(new CANNON.Vec3(dir.x * J, dir.y * J, dir.z * J), new CANNON.Vec3(hit.point.x - hit.body.position.x, hit.point.y - hit.body.position.y, hit.point.z - hit.body.position.z));
+        hit.body.wakeUp();
+      }
+      FX.debris(hit.point, 0x8a7a5a, 3, 0.08, 3);
+    }
     return;
   }
   const d = dummyOf(b);

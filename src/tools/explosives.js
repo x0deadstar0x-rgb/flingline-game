@@ -1,8 +1,9 @@
 // Things that go boom.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, rand, popup, later, afterStep, tv } from '../core.js';
-import { spawnItem, createEnt, explode, detonate, addWeld, launchFireworks, addFirePatch, ITEMS } from '../items.js';
+import { G, rand, popup, later, afterStep, tv, toast } from '../core.js';
+import { spawnItem, createEnt, explode, detonate, addWeld, launchFireworks, addFirePatch, ITEMS, removeEnt } from '../items.js';
+import { carveTerrain, spawnCube } from '../terrain.js';
 import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
 import { dropNuke } from '../nuke.js';
@@ -38,29 +39,75 @@ function makeBlackHole(pos) {
   sfx.blackhole();
   G.blackholes.push({ pos: pos.clone().add(new THREE.Vector3(0, 1.5, 0)), t: 0, life: 3.8, mesh: g, ring, ring2 });
 }
+// The SUPER black hole: placed where you aim, grows for 12 s, pulls from 60 m away, and eats
+// everything that reaches it: objects, people, falling chunks of building, the ground itself
+// (a growing ball of it) and the buildings around it.
+const sCore = new THREE.SphereGeometry(1, 20, 14);
+function makeSuperHole(pos) {
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(sCore, new THREE.MeshBasicMaterial({ color: 0x000000 }));
+  const halo = new THREE.Mesh(sCore, new THREE.MeshBasicMaterial({ color: 0x9d4edd, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false }));
+  halo.scale.setScalar(1.35);
+  const disk = new THREE.Group();
+  const rings = [];
+  for (let i = 0; i < 4; i++) {
+    const r = new THREE.Mesh(new THREE.TorusGeometry(1.6 + i * 0.55, 0.09 + i * 0.03, 4, 48), new THREE.MeshBasicMaterial({ color: [0xffb347, 0xff6b35, 0xc77dff, 0x7b2cbf][i], transparent: true, opacity: 0.85 - i * 0.12, blending: THREE.AdditiveBlending, depthWrite: false }));
+    r.rotation.x = Math.PI / 2 + (i - 1.5) * 0.06;
+    disk.add(r); rings.push(r);
+  }
+  g.add(core, halo, disk);
+  g.position.copy(pos);
+  G.scene.add(g);
+  sfx.blackhole(pos); sfx.blackhole(pos);
+  // it stays open until you click again with the tool (or load another map), growing all the time
+  const h = { pos: pos.clone(), t: 0, life: Infinity, mesh: g, ring: rings[0], ring2: rings[2], rings, disk, superHole: true, eatT: 0, size: 1.2, lastR: 0 };
+  G.blackholes.push(h);
+  G.cubeSinks = G.cubeSinks || [];
+  h.sink = { pos: h.pos, r: 45, core: 1.5, pull: 90 };
+  G.cubeSinks.push(h.sink);
+  popup('⚠ SUPER BLACK HOLE ⚠', pos.clone().add(new THREE.Vector3(0, 4, 0)), '#c77dff', 30);
+}
 const _f = new CANNON.Vec3();
 function bhForce() {
   for (const h of G.blackholes) {
     const grow = Math.min(1, h.t / 0.6);
+    const R = h.superHole ? 60 + 40 * Math.min(1, h.t / 60) : 26, P = h.superHole ? 150 : 75;
     for (const b of G.world.bodies) {
       if (b.type !== CANNON.Body.DYNAMIC) continue;
       const dx = h.pos.x - b.position.x, dy = h.pos.y - b.position.y, dz = h.pos.z - b.position.z;
       const d = Math.hypot(dx, dy, dz);
-      if (d > 26 || d < 0.01) continue;
-      let a = (75 * (1 - d / 26) + 12) * grow;
-      if (b.isPlayer) a *= 0.35;
+      if (d > R || d < 0.01) continue;
+      // gets there: eaten (removed after the physics step)
+      if (h.superHole && d < h.size * 0.9 && !b._eaten) { b._eaten = true; afterStep(() => eatBody(h, b)); continue; }
+      let a = (P * (1 - d / R) + 12) * grow;
+      if (b.isPlayer) a *= h.superHole ? 0.45 : 0.35;
       const inv = 1 / d;
       // pull + swirl
       _f.set((dx * inv + -dz * inv * 0.5) * a * b.mass, (dy * inv) * a * b.mass + 9.82 * b.mass * 0.5 * grow, (dz * inv + dx * inv * 0.5) * a * b.mass);
       b.applyForce(_f);
-      if (d < 2) b.velocity.scale(0.9, b.velocity);
-      const sp = b.velocity.length();
-      if (sp > 30) b.velocity.scale(30 / sp, b.velocity);
+      if (d < 2 && !h.superHole) b.velocity.scale(0.9, b.velocity);
+      const sp = b.velocity.length(), vmax = h.superHole ? 45 : 30;
+      if (sp > vmax) b.velocity.scale(vmax / sp, b.velocity);
       b.wakeUp();
     }
   }
 }
 G.extraForces.push(bhForce);
+function eatBody(h, b) {
+  b._eaten = false;
+  FX.particle({ pos: tv(b.position), vel: new THREE.Vector3(), color: 0xc77dff, size: 0.8, life: 0.3, glow: true, add: true, gravity: 0, drag: 0, grow: -0.9, floor: false });
+  if (b.isPlayer) {
+    G.player.respawn();
+    toast('You were spaghettified by the black hole!');
+    return;
+  }
+  if (b.isPiece) { G.eatPiece && G.eatPiece(b); return; }
+  const e = b.ent;
+  if (!e || e.dead) return;
+  if (e.kind === 'ragpart' || e.kind === 'dummybody') { e.dummy.respawn(); return; }
+  removeEnt(e, true);
+  G.stats.broken = (G.stats.broken || 0) + 1;
+}
 export function updateBlackHoles(dt) {
   for (let i = G.blackholes.length - 1; i >= 0; i--) {
     const h = G.blackholes[i];
@@ -74,15 +121,61 @@ export function updateBlackHoles(dt) {
       const p = h.pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rand(-2, 2), Math.sin(a) * r));
       FX.particle({ pos: p, vel: h.pos.clone().sub(p).multiplyScalar(2).add(new THREE.Vector3(-Math.sin(a) * 6, 0, Math.cos(a) * 6)), color: Math.random() < 0.5 ? 0xc77dff : 0x5a189a, size: 0.15, life: 0.45, glow: true, add: true, gravity: 0, drag: 0 });
     }
+    if (h.superHole) { updateSuperHole(h, dt); if (h.t < h.life) continue; }
     for (const d of G.dummies) if (d.state === 'standing' && d.center().distanceTo(h.pos) < 16 * k) d.knock(null);
     if (G.player && G.player.pos().distanceTo(h.pos) < 26) G.player.stun = Math.max(G.player.stun, 0.3);
     if (h.t >= h.life) {
       G.scene.remove(h.mesh);
       G.blackholes.splice(i, 1);
-      explode(h.pos, 1.9, { noCrater: true }); // a singularity pops in the air
-      FX.confetti(h.pos, 40, 16);
+      if (h.sink) G.cubeSinks.splice(G.cubeSinks.indexOf(h.sink), 1);
+      if (h.superHole) {
+        // it evaporates in a blinding flash
+        explode(h.pos, 3.2, { noCrater: true });
+        FX.ring(h.pos, 60, 0xe0c3ff, 1.2);
+        for (const s of [1, 1.6]) FX.fireball(h.pos, 8 * s, 0.9);
+      } else {
+        explode(h.pos, 1.9, { noCrater: true }); // a singularity pops in the air
+        FX.confetti(h.pos, 40, 16);
+      }
     }
   }
+}
+
+function updateSuperHole(h, dt) {
+  const t = h.t;
+  h.size = 1.2 + 3.6 * Math.min(1, t / 6) + 3.2 * Math.min(1, Math.max(0, t - 6) / 54); // the black core
+  const eatR = 2 + 9 * Math.min(1, t / 8) + 17 * Math.min(1, Math.max(0, t - 8) / 52); // how far it has eaten into the ground
+  h.sink.core = h.size;
+  h.sink.r = 45 + 35 * Math.min(1, t / 60);
+  const fade = t > h.life - 0.6 ? Math.max(0.05, (h.life - t) / 0.6) : 1;
+  h.mesh.scale.setScalar(h.size * fade * (1 + Math.sin(t * 13) * 0.03));
+  h.disk.rotation.y += dt * 2.5;
+  h.rings.forEach((r, i) => { r.rotation.z += dt * (5 - i) * (i % 2 ? -1 : 1); });
+  // swirling streaks
+  for (let j = 0; j < 6; j++) {
+    const a = rand(0, Math.PI * 2), r = rand(8, 22);
+    const p = h.pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rand(-4, 4), Math.sin(a) * r));
+    FX.particle({ pos: p, vel: h.pos.clone().sub(p).multiplyScalar(1.6).add(new THREE.Vector3(-Math.sin(a) * 12, 0, Math.cos(a) * 12)), color: [0xc77dff, 0xff9e4a, 0x5a189a][j % 3], size: 0.22, life: 0.55, glow: true, add: true, gravity: 0, drag: 0, floor: false });
+  }
+  // it eats the ground and the buildings around it, bite by bite; the bits fly in
+  h.eatT -= dt;
+  if (h.eatT <= 0 && t < h.life - 0.5) {
+    h.eatT = 0.25;
+    // (every few bites the whole ball again, in case new things fell in; otherwise the new part)
+    const res = carveTerrain(h.pos, eatR, { sphere: true });
+    h.lastR = eatR;
+    if (res && res.removed) {
+      const cols = res.sample.length ? res.sample : [0x6b4f35, 0x7d7f86];
+      for (let q = 0; q < Math.min(22, 4 + (res.removed >> 4)); q++) {
+        const dir = new THREE.Vector3(rand(-1, 1), rand(-1, 0.4), rand(-1, 1)).normalize();
+        spawnCube(h.pos.clone().addScaledVector(dir, eatR * rand(0.8, 1.1)), dir.multiplyScalar(-rand(2, 6)), cols[(Math.random() * cols.length) | 0], 0.45, 4);
+      }
+    }
+    if (G.blastBuildings) G.blastBuildings(h.pos, eatR * 0.9, { quiet: true, scorch: false });
+  }
+  // people nearby lose their footing; you get dragged
+  for (const d of G.dummies) if (d.state === 'standing' && d.center().distanceTo(h.pos) < 40) d.knock(null);
+  if (G.player && G.player.pos().distanceTo(h.pos) < 60) { G.player.stun = Math.max(G.player.stun, 0.3); G.shake = Math.max(G.shake, 0.25); }
 }
 
 export const boomTools = [
@@ -159,6 +252,20 @@ export const boomTools = [
       const e = createEnt(BHBALL, throwPos(), { spawned: true, vel: throwVel(18, 3) });
       e.fuse = 1.0;
       e.onFuse = () => { const p = tv(e.body.position); G.removeEnt(e, true); makeBlackHole(p); };
+    },
+    update(dt) { cool(this, dt); },
+  },
+  {
+    id: 'superhole', name: 'Super Black Hole', icon: '🕳️', color: 0x3c096c, hint: 'Click a spot: a huge black hole that eats EVERYTHING, even the ground and buildings. Click again to close it',
+    desc: 'Opens a giant black hole where you aim. It stays open until you click again, growing the whole time: it pulls everything in from 60 m (later 100 m) away and swallows it: objects, people, cars, chunks of building, and a ball of the ground itself up to 30 m across each way, leaving a huge round crater. When you close it, it evaporates in a flash.',
+    down() {
+      if (this.cd > 0) return;
+      this.cd = 0.8;
+      const open = G.blackholes.find((h) => h.superHole && h.life === Infinity);
+      if (open) { open.life = open.t + 0.6; toast('Closing the black hole…'); return; }
+      const h = aimPoint(300, 30);
+      makeSuperHole(h.point.clone().add(new THREE.Vector3(0, h.miss ? 0 : 3.5, 0)));
+      toast('Black hole open: click again to close it');
     },
     update(dt) { cool(this, dt); },
   },
