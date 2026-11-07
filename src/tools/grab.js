@@ -253,7 +253,7 @@ export const line = {
       G.crossHint = null;
       if (input.held('reelIn')) reelBy(-dt * REEL_SPEED);
       if (input.held('reelOut')) reelBy(dt * REEL_SPEED);
-      const hand = G.aim.hand;
+      const hand = G.aim.lineHand || G.aim.hand;
       if (g.hook) {
         g.zip = Math.max(0, g.zip - dt);
         const ap = tv(g.anchor);
@@ -280,7 +280,8 @@ export const line = {
       if (snap.t <= 0) { snap = null; strand.hide(); }
       else {
         strand.setColor(0xffffff);
-        strand.update(G.aim.hand, G.aim.hand.clone().lerp(snap.to, snap.t / 0.12), 0, null);
+        const lh = G.aim.lineHand || G.aim.hand;
+        strand.update(lh, lh.clone().lerp(snap.to, snap.t / 0.12), 0, null);
       }
     } else strand.hide();
     if (showHint) {

@@ -428,6 +428,13 @@ function onCollide(e) {
   if (def.special === 'duck' && v > 2) sfx.squeak(sp);
   if (def.special === 'piano' && v > 3) sfx.piano(v, sp);
   if (def.special === 'balloon' && v > 9) { afterStep(() => popBalloon(ent)); return; }
+  // heavy things slamming into the ground leave a dent
+  if (e.body && e.body.isTerrain && v > 20 && e.target.mass > 40 && G.crater && G.time - (ent.dentT || -9) > 0.5) {
+    ent.dentT = G.time;
+    const r = Math.min(2.2, 0.35 + Math.sqrt(e.target.mass * v) * 0.012);
+    const p = tv(sp);
+    afterStep(() => G.crater(p, 0.3, { craterRadius: r, maxCubes: 25, realBlocks: 1 }));
+  }
   if (def.explosive) {
     const ex = def.explosive;
     const other = e.body;

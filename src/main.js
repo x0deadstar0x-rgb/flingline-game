@@ -11,6 +11,7 @@ import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
 import { TOOL, updateProjectiles, updateBlackHoles } from './tools/index.js';
+import { initViewmodel, renderViewmodel } from './viewmodel.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
 
 // expose a few helpers so modules can call each other without import cycles
@@ -64,6 +65,7 @@ Items.initMaterials();
 world.addEventListener('preStep', Items.physicsForces);
 
 initFx(scene);
+initViewmodel(renderer);
 loadMap('island');
 G.player = new Player();
 G.player.respawn();
@@ -184,10 +186,10 @@ function undoSpawn() {
   toast('Undone');
 }
 
-UI.onEquip = (t) => { G.player.setToolColor(t.color); G.toolNote = null; G.crossHint = null; };
+UI.onEquip = (t) => { G.player.setTool(t.id); G.toolNote = null; G.crossHint = null; };
 initMenu();
 buildHotbar();
-G.player.setToolColor(currentTool().color);
+G.player.setTool(currentTool().id);
 
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
@@ -231,18 +233,20 @@ function gameActions(dt) {
   }
   // click: throw what you hold (or zip to the hook), otherwise use the tool
   if (input.tap('use')) {
-    if (G.grab) { line.throwIt(); useLock = true; }
+    if (G.grab) { line.throwIt(); useLock = true; G.recoil(0.6, false); }
     else {
       useLock = false;
+      // recoil only when the tool really fired (its cooldown started)
+      const cd0 = tool.cd || 0;
       if (tool.down) tool.down();
-      if (tool.id !== 'hands') G.player.kick = Math.max(G.player.kick || 0, 0.25);
+      if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1);
     }
   }
   if (!input.held('use')) useLock = false;
   if (input.tap('rotate') && !G.grab && tool.rotate) tool.rotate();
   line.update(dt, input, tool.id === 'hands');
   if (tool.update) tool.update(dt, input);
-  if (input.held('use') && !useLock && !G.grab && tool.held) tool.held(dt);
+  if (input.held('use') && !useLock && !G.grab && tool.held) { const cd0 = tool.cd || 0; tool.held(dt); if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1); }
 }
 let useLock = false; // after a throw, holding the button doesn't also fire the tool
 
@@ -258,7 +262,7 @@ function frame() {
     updateToast(rdt);
     input.lookX = 0; input.lookY = 0;
     endFrame();
-    if (needRender) { needRender = false; renderer.render(scene, camera); }
+    if (needRender) { needRender = false; renderer.render(scene, camera); renderViewmodel(renderer); }
     return;
   }
   if (wasPaused) { setAudioPaused(false); wasPaused = false; }
@@ -311,6 +315,7 @@ function frame() {
 
   endFrame();
   renderer.render(scene, camera);
+  renderViewmodel(renderer);
   needRender = false;
 }
 frame();
