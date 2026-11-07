@@ -9,6 +9,7 @@ import * as FX from './fx.js';
 import { sfx } from './audio.js';
 import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater, addGridStatic } from './terrain.js';
 import { setBuildingGroup, clearBuildings } from './buildings.js';
+import { addPool, clearPools, updatePools } from './liquids.js';
 import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT } from './city.js';
 
 let mapGroup = null;
@@ -80,6 +81,30 @@ function tree(x, y, z, s = 1) {
     deco(cone, x, y + (2.2 + i * 0.9) * s, z);
   }
   addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+}
+// lots of trees at once (big maps): a few instanced meshes for all of them, a collider each
+const trunkGeoI = new THREE.CylinderGeometry(0.22, 0.32, 2.2, 6), coneGeoI = new THREE.ConeGeometry(1, 1, 7);
+function forest(list) {
+  if (!list.length) return;
+  const cols = snowyTrees ? [0xeef4f8] : leafCols;
+  const trunks = new THREE.InstancedMesh(trunkGeoI, smat(0x7a5230), list.length);
+  const per = cols.map(() => []);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  list.forEach(([x, y, z, s], n) => {
+    trunks.setMatrixAt(n, m4.compose(new THREE.Vector3(x, y + 1.1 * s, z), q.identity(), new THREE.Vector3(s, s, s)));
+    const ci = (r01() * cols.length) | 0;
+    for (let i = 0; i < 3; i++) per[ci].push(m4.clone().compose(new THREE.Vector3(x, y + (2.2 + i * 0.9) * s, z), q.setFromEuler(e.set(0, r01() * 3, 0)), new THREE.Vector3((1.6 - i * 0.4) * s, 1.6 * s, (1.6 - i * 0.4) * s)));
+    addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, null);
+    addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+  });
+  for (const m of [trunks]) { m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; mapGroup.add(m); }
+  per.forEach((mats, ci) => {
+    if (!mats.length) return;
+    const im = new THREE.InstancedMesh(coneGeoI, smat(cols[ci]), mats.length);
+    mats.forEach((mm, k) => im.setMatrixAt(k, mm));
+    im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
+    mapGroup.add(im);
+  });
 }
 function rock(x, y, z, r = 1) {
   const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), smat(0x8a8f96));
@@ -495,6 +520,89 @@ function buildCity() {
   crowd(14, 0, 2, 13); crowd(6, 0, 20, 30); crowd(2, 48, 20, 6, 0, ['zombie']);
 }
 
+// ---- Caves: a mountain full of them
+function cavesHeight(x, z) {
+  const e = Math.max(Math.abs(x), Math.abs(z));
+  const top = 36 + 1.5 * Math.sin(x * 0.07) * Math.cos(z * 0.06) + Math.sin(x * 0.19 + z * 0.13);
+  if (e < 84) return top;
+  if (e < 98) return 1 + (top - 1) * Math.pow((98 - e) / 14, 0.6); // cliffs all round
+  return 1 + 0.4 * Math.sin(x * 0.2) * Math.sin(z * 0.17);
+}
+function buildCaves() {
+  srand(77);
+  makeTerrain({
+    W: 220, es: 3, bedrock: -40, height: cavesHeight,
+    color: (h) => (h > 30 ? 0x4f7a3a : h > 3 ? 0x6e7076 : 0x5fae4a),
+    // rock in bands of colour, deeper = darker
+    under: (d, topc) => (d <= 0 ? topc : d <= 2 ? 0x5a5550 : [0x6d6f76, 0x63666e, 0x77716a, 0x5d6068][Math.floor(d / 12) % 4]),
+    caves: (stamp, fill) => {
+      // the way in, from the valley in the south
+      tunnel(stamp, [[0, 3.6, 100, 4], [0, 4, 84, 4.4], [2, 4.5, 66, 4.6], [1, 6, 48, 5]]);
+      // the Great Hall, held up by four pillars
+      for (const [x, y, z, r] of [[0, 10, 30, 16], [-10, 8, 22, 12], [10, 9, 38, 12], [0, 14, 28, 13], [-6, 6, 40, 9]]) stamp(x, y, z, r);
+      for (const [x, z] of [[-8, 24], [8, 24], [-8, 37], [8, 37]]) fill(x, z, 1.7, -8, 30);
+      // a skylight up to the top of the mountain
+      tunnel(stamp, [[6, 22, 26, 2.6], [7, 30, 23, 2.4], [8, 38, 20, 2.6]]);
+      // east: crystal grotto, and a deep pit below it with a hidden chamber
+      tunnel(stamp, [[16, 6, 30, 3.2], [30, 5, 26, 3], [42, 4, 20, 3.2]]);
+      for (const [x, y, z, r] of [[52, 4, 18, 10], [58, 6, 26, 7], [48, 7, 10, 6]]) stamp(x, y, z, r);
+      tunnel(stamp, [[55, -2, 12, 2.3], [55, -9, 11, 2.2], [55, -15, 10, 2.4]]);
+      stamp(55, -17, 8, 8); stamp(62, -16, 4, 5);
+      // west: an underground lake
+      tunnel(stamp, [[-14, 4, 26, 3.2], [-28, 2, 24, 3.2], [-40, 1, 20, 3.4]]);
+      for (const [x, y, z, r] of [[-55, 0, 18, 13], [-62, 2, 8, 9], [-48, 1, 28, 8]]) stamp(x, y, z, r);
+      // north: down to the lava chasm, with a narrow bridge over the lava
+      tunnel(stamp, [[0, 6, 14, 3.5], [1, 2, 0, 3.4], [3, -4, -14, 3.6], [2, -8, -24, 4]]);
+      for (const [x, y, z, r] of [[0, -10, -36, 14], [9, -12, -48, 10], [-9, -10, -46, 10], [0, -8, -56, 8]]) stamp(x, y, z, r);
+      for (let z = -26; z >= -60; z -= 0.5) fill(Math.sin(z * 0.15) * 2.5, z, 1.2, -40, -13.5);
+      // the old mine: narrow tunnels winding north-west
+      tunnel(stamp, [[-12, 8, 18, 1.9], [-20, 9, 5, 1.8], [-32, 9, -5, 1.8], [-30, 10, -20, 1.8], [-44, 11, -28, 1.8], [-55, 12, -35, 1.9], [-62, 12, -50, 2]]);
+      stamp(-62, 12, -52, 4.5);
+      // a sealed room nobody has found (dig to it from the mine)
+      stamp(-36, 15, -40, 4.5);
+    },
+  });
+  const F = (x, y, z) => (G.floorAt ? G.floorAt(x, y, z) : y);
+  // crystals: lots in the grotto, some everywhere else
+  for (let i = 0; i < 26; i++) { const a = rr(0, Math.PI * 2), r = rr(0, 12); crystals(52 + Math.cos(a) * r, 6, 18 + Math.sin(a) * r, rr(0.8, 2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
+  for (const [x, y, z, s, c] of [[0, 4, 30, 1.6, 0x7ff7ff], [-12, 4, 20, 1, 0xb98cff], [12, 4, 40, 1.2, 0x7ff7ff], [55, -16, 8, 2.2, 0xffd86b], [60, -16, 4, 1.4, 0xffd86b], [-60, 4, 6, 1.1, 0x7ff7ff], [0, -9, -30, 1.3, 0xff8a5a], [-36, 15, -40, 1.8, 0xffd86b]]) crystals(x, y, z, s, c);
+  // the lake and the lava
+  addPool('water', -56, 16, 15, -3, mapGroup);
+  addPool('lava', 0, -44, 19, -17, mapGroup);
+  // mine supports: posts and a beam every few metres
+  const mine = [[-12, 8, 18], [-20, 9, 5], [-32, 9, -5], [-30, 10, -20], [-44, 11, -28], [-55, 12, -35], [-62, 12, -50]];
+  for (let s = 0; s < mine.length - 1; s++) {
+    const [ax, ay, az] = mine[s], [bx, by, bz] = mine[s + 1];
+    const L = Math.hypot(bx - ax, bz - az), n = Math.floor(L / 5);
+    const dx = (bx - ax) / L, dz = (bz - az) / L;
+    for (let q = 1; q <= n; q++) {
+      const x = ax + (bx - ax) * q / (n + 1), z = az + (bz - az) * q / (n + 1), y = F(x, ay + (by - ay) * q / (n + 1), z);
+      const ox = -dz * 1.35, oz = dx * 1.35, rot = [0, Math.atan2(dx, dz), 0];
+      sbox(0.25, 2.4, 0.25, x + ox, y + 1.2, z + oz, 0x6e4626, 'plank', rot);
+      sbox(0.25, 2.4, 0.25, x - ox, y + 1.2, z - oz, 0x6e4626, 'plank', rot);
+      sbox(3.2, 0.25, 0.3, x, y + 2.45, z, 0x6e4626, 'plank', [0, Math.atan2(dx, dz) + Math.PI / 2, 0]);
+      if (q % 2) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.22), new THREE.MeshStandardMaterial({ color: 0xffc46b, emissive: 0xffa53a, emissiveIntensity: 2 })); deco(lamp, x, y + 2.15, z); }
+    }
+  }
+  // lanterns along the way in
+  for (let z = 92; z > 50; z -= 8) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.3), new THREE.MeshStandardMaterial({ color: 0xffc46b, emissive: 0xffa53a, emissiveIntensity: 2 })); deco(lamp, z % 16 ? 3.6 : -3.6, F(0, 4, z) + 2.6, z); }
+  // a jump pad to get back out of the deep pit, and one on the lake shore
+  pad(55, F(55, -16, 8), 8, new THREE.Vector3(0, 26, 0), 0xffb703);
+  sleepy(() => {
+    for (let i = 0; i < 5; i++) put('crate', rr(-6, 6), F(0, 6, 44), 44 + rr(-3, 3));
+    for (let i = 0; i < 4; i++) put('tnt', -30 + i * 0.9, F(-30, 9, -6) + 0.1, -6);
+    put('barrel', -44, F(-44, 11, -28) + 0.1, -27);
+    for (let i = 0; i < 6; i++) put('gold', -36 + rr(-2, 2), F(-36, 15, -40) + 0.2, -40 + rr(-2, 2));   // the secret room
+    for (let i = 0; i < 4; i++) put('gold', 55 + rr(-3, 3), F(55, -16, 8) + 0.2, 8 + rr(-3, 3));      // the deep pit
+    for (let i = 0; i < 6; i++) put('crystal', 52 + rr(-6, 6), F(52, 4, 18) + 0.6, 18 + rr(-6, 6));
+    for (let i = 0; i < 6; i++) put('boulder', rr(-10, 10), F(0, 10, 30) + 1, 30 + rr(-10, 10));
+  });
+  // up top
+  for (let i = 0; i < 30; i++) { const x = rr(-78, 78), z = rr(-78, 78); tree(x, cavesHeight(x, z) - 0.2, z, rr(0.8, 1.3)); }
+  for (let i = 0; i < 12; i++) { const x = rr(-100, 100), z = rr(98, 108); tree(x, 1, z, rr(0.8, 1.2)); }
+  crowd(6, 0, 30, 8, F(0, 6, 30) + 0.1); crowd(3, -55, 30, 4, F(-50, 2, 28) + 0.1);
+}
+
 // ---- Desert canyon with a river, mesas and cacti
 function desertHeight(x, z) {
   let h = 1.5 * Math.sin(x * 0.07) * Math.sin(z * 0.05) + 1.0 * Math.sin(x * 0.15 + z * 0.1);
@@ -621,6 +729,7 @@ function buildPlayground() {
 export const MAPS = [
   { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
   { id: 'city', name: 'City', icon: '🏙️', desc: 'Huge towers made of blocks: climb the stairs to the roof, blow out the windows, bring them down', build: buildCity, spawn: [0, 1.2, 12], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 110, 420], killY: -30, water: -1000, walk: 118 },
+  { id: 'caves', name: 'Caves', icon: '🦇', desc: 'A mountain full of caves: a great hall, a crystal grotto, an underground lake, a lava chasm, old mine tunnels, a skylight… and secrets', build: buildCaves, spawn: [0, 2.4, 110], sky: [0x6d8fb8, 0xd9c7a8], fog: [0xd9c7a8, 90, 330], killY: -60, water: -1000, walk: 100 },
   { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
   { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Big rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 100, 360], killY: -30, water: -1, walk: 110 },
   { id: 'desert', name: 'Desert Canyon', icon: '🏜️', desc: 'Mesas, a river canyon, cacti, oil drums & a minefield', build: buildDesert, spawn: [0, 4, 50], sky: [0x6aa8e8, 0xffd9a8], fog: [0xffd9a8, 90, 320], killY: -30, water: -2.5, walk: 85 },
@@ -655,7 +764,7 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); G.groundAt = null;
+  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); clearPools(); G.groundAt = null;
   if (G.clearNukes) G.clearNukes();
   G.mapId = m.id;
   G.map = m;
@@ -734,6 +843,7 @@ export function updateMap(dt) {
   if (stars && G.camera) stars.position.copy(G.camera.position);
   updateTerrain();
   updateCubes(dt);
+  updatePools(dt);
   if (water) {
     const p = water.geometry.attributes.position;
     const t = G.time;

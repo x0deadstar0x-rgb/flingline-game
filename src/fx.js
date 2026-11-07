@@ -51,6 +51,8 @@ function take(pool, isGlow) {
 
 // Spawn a single particle.
 export function particle(o) {
+  // too far away to matter: skipped (big maps)
+  if (G.camera && o.pos && (o.pos.x - G.camera.position.x) ** 2 + (o.pos.z - G.camera.position.z) ** 2 > 280 * 280) return null;
   const glow = !!o.glow;
   const m = take(glow ? glowPool : litPool, glow);
   m.visible = true;

@@ -46,8 +46,16 @@ export function createTerrain(opts, group, bodies) {
     paint: new Map(),   // colours of blocks you placed: column * 65536 + level + 32768 -> colour
   };
   // caves: the map carves them now (stamp(x, y, z, r) hollows out a ball of air)
-  if (opts.caves) opts.caves((x, y, z, r) => stampVoid(x, y, z, r));
-  for (let ci = 0; ci < nc; ci++) for (let cj = 0; cj < nc; cj++) buildChunk(ci, cj);
+  if (opts.caves) opts.caves((x, y, z, r) => stampVoid(x, y, z, r), (x, z, r, y0, y1) => fillColumn(x, z, r, y0, y1));
+  // Big maps stream: the ground near you is built first (nearest first, a few pieces a frame),
+  // and the whole map is also drawn as a light far version, so you can see everything.
+  T.stream = !!opts.stream;
+  T.near = opts.near ?? 175;
+  if (T.stream) {
+    const sx = opts.spawn ? opts.spawn[0] : 0, sz = opts.spawn ? opts.spawn[2] : 0;
+    for (let ci = 0; ci < nc; ci++) for (let cj = 0; cj < nc; cj++) if (chunkDist(ci, cj, sx, sz) < 72) buildChunk(ci, cj);
+    buildFar();
+  } else for (let ci = 0; ci < nc; ci++) for (let cj = 0; cj < nc; cj++) buildChunk(ci, cj);
   // (ground physics is built on demand: see ensureGround)
   G.groundAt = terrainHeight;
   G.floorAt = floorAt;
@@ -104,7 +112,7 @@ function staticsIn(aabb, cb) {
 // ------------------------------------------------------------- water
 // Water only exists where the map has sea / lakes. Columns that start below the water level are
 // water; holes you dig next to water flood, holes dug inland stay dry.
-const noWater = () => -Infinity;
+const noWater = (x, z) => (G.poolLevel ? G.poolLevel(x, z) : -Infinity);
 G.waterAt = noWater;
 export function setupWater(level) {
   if (!T) { G.waterAt = () => level; return null; }
@@ -127,10 +135,11 @@ export function setupWater(level) {
 }
 // water surface height at x, z (or -Infinity where there is no water)
 export function waterAt(x, z) {
-  if (!T || !T.water) return -Infinity;
+  const pl = G.poolLevel ? G.poolLevel(x, z) : -Infinity; // lakes in caves, acid, lava
+  if (!T || !T.water) return pl;
   const i = Math.floor((x - T.x0) / V), j = Math.floor((T.z0 - z) / V);
-  if (i < 0 || j < 0 || i >= T.N || j >= T.N) return T.water.seaOutside ? T.water.level : -Infinity;
-  return T.water.wet[i * T.N + j] ? T.water.level : -Infinity;
+  if (i < 0 || j < 0 || i >= T.N || j >= T.N) return T.water.seaOutside ? Math.max(pl, T.water.level) : pl;
+  return T.water.wet[i * T.N + j] ? Math.max(pl, T.water.level) : pl;
 }
 // after digging: water flows into dug columns that touch water and are below the water level
 function flood(ia, ib, ja, jb) {
@@ -488,14 +497,101 @@ function buildChunk(ci, cj) {
   }
 }
 
-// rebuild chunks that changed (a few per frame so chain explosions don't stall)
+function chunkDist(ci, cj, x, z) {
+  const cx = T.x0 + (ci + 0.5) * CH * V, cz = T.z0 - (cj + 0.5) * CH * V;
+  return Math.hypot(cx - x, cz - z);
+}
+// rebuild chunks that changed (a few per frame so chain explosions don't stall). On big maps
+// changes far away just wait: that piece is rebuilt when you get close.
+let streamTick = 0;
 export function updateTerrain() {
-  if (!T || !T.dirty.size) return;
+  if (!T) return;
+  const cam = G.camera ? G.camera.position : null;
   let n = 0;
   for (const idx of T.dirty) {
+    if (n >= 6) break;
     T.dirty.delete(idx);
-    buildChunk(Math.floor(idx / T.nc), idx % T.nc);
-    if (++n >= 6) break;
+    const ci = Math.floor(idx / T.nc), cj = idx % T.nc;
+    if (T.stream && cam && chunkDist(ci, cj, cam.x, cam.z) > T.near + 20) {
+      const m = T.chunks[idx];
+      if (m) { m.geometry.dispose(); m.removeFromParent(); T.chunks[idx] = null; }
+      continue;
+    }
+    buildChunk(ci, cj);
+    n++;
+  }
+  if (!T.stream || !cam) return;
+  if (T.farU) T.farU.value.set(cam.x, cam.z, T.near - 14);
+  // stream in the nearest missing pieces (and hide the far-away ones)
+  if (++streamTick % 3) return;
+  const want = [];
+  for (let ci = 0; ci < T.nc; ci++) for (let cj = 0; cj < T.nc; cj++) {
+    const idx = ci * T.nc + cj, d = chunkDist(ci, cj, cam.x, cam.z), m = T.chunks[idx];
+    if (m) m.visible = d < T.near + 26;
+    else if (d < T.near) want.push([d, ci, cj]);
+  }
+  want.sort((a, b) => a[0] - b[0]);
+  const t0 = performance.now();
+  for (const [, ci, cj] of want) { buildChunk(ci, cj); if (performance.now() - t0 > 5) break; }
+}
+
+// the far version of the whole map: 4 m blocks, one block lower than the real ground (which
+// always covers it near you; the far version isn't drawn within the near radius at all)
+const FARC = 8;
+function buildFar() {
+  const { N, lv, x0, z0, topc } = T;
+  const M = Math.ceil(N / FARC);
+  const fh = new Int16Array(M * M), fc = new Uint32Array(M * M);
+  for (let a = 0; a < M; a++) for (let b = 0; b < M; b++) {
+    let mn = 1e9;
+    for (let i = a * FARC; i < Math.min(N, (a + 1) * FARC); i++) for (let j = b * FARC; j < Math.min(N, (b + 1) * FARC); j++) mn = Math.min(mn, lv[i * N + j]);
+    fh[a * M + b] = mn - 1;
+    const ci = Math.min(N - 1, a * FARC + (FARC >> 1)), cj = Math.min(N - 1, b * FARC + (FARC >> 1));
+    fc[a * M + b] = topc[ci * N + cj];
+  }
+  const U = { value: new THREE.Vector3(0, 0, 0) };
+  T.farU = U;
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uNear = U;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ;\nuniform vec3 uNear;').replace('void main() {', 'void main() {\n  if (distance(vWXZ, uNear.xy) < uNear.z) discard;');
+  };
+  const nb = (a, b, h) => (a < 0 || b < 0 || a >= M || b >= M ? h - 60 : fh[a * M + b]);
+  const TS = 32;
+  for (let ta = 0; ta < M; ta += TS) for (let tb = 0; tb < M; tb += TS) {
+    vp = 0;
+    for (let a = ta; a < Math.min(M, ta + TS); a++) for (let b = tb; b < Math.min(M, tb + TS); b++) {
+      const h = fh[a * M + b], y = h * V, col = fc[a * M + b], sc = shade(col, 0.82);
+      const xa = x0 + a * FARC * V, xb = x0 + Math.min(N, (a + 1) * FARC) * V;
+      const za = z0 - b * FARC * V, zb = z0 - Math.min(N, (b + 1) * FARC) * V;
+      quad(xa, y, za, xb, y, za, xb, y, zb, xa, y, zb, 0, 1, 0, col);
+      let n;
+      if ((n = nb(a + 1, b, h)) < h) quad(xb, n * V, za, xb, n * V, zb, xb, y, zb, xb, y, za, 1, 0, 0, sc);
+      if ((n = nb(a - 1, b, h)) < h) quad(xa, n * V, zb, xa, n * V, za, xa, y, za, xa, y, zb, -1, 0, 0, sc);
+      if ((n = nb(a, b - 1, h)) < h) quad(xa, n * V, za, xb, n * V, za, xb, y, za, xa, y, za, 0, 0, 1, sc);
+      if ((n = nb(a, b + 1, h)) < h) quad(xb, n * V, zb, xa, n * V, zb, xa, y, zb, xb, y, zb, 0, 0, -1, sc);
+    }
+    if (!vp) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(P.slice(0, vp), 3));
+    const cb = new Uint8Array(vp);
+    for (let q = 0; q < vp; q++) cb[q] = Math.round(C[q] * 255);
+    geo.setAttribute('color', new THREE.BufferAttribute(cb, 3, true));
+    geo.computeBoundingSphere();
+    const m = new THREE.Mesh(geo, mat);
+    T.group.add(m);
+  }
+}
+// make a round column of ground solid from y0 to y1 (pillars in caves)
+function fillColumn(x, z, r, y0, y1) {
+  const { N, x0, z0 } = T;
+  for (let i = Math.max(0, Math.floor((x - r - x0) / V)); i <= Math.min(N - 1, Math.floor((x + r - x0) / V)); i++) {
+    for (let j = Math.max(0, Math.floor((z0 - z - r) / V)); j <= Math.min(N - 1, Math.floor((z0 - z + r) / V)); j++) {
+      const cx = x0 + (i + 0.5) * V, cz = z0 - (j + 0.5) * V;
+      if ((cx - x) ** 2 + (cz - z) ** 2 > r * r) continue;
+      fillLevels(i * N + j, Math.floor(y0 / V), Math.ceil(y1 / V));
+    }
   }
 }
 
@@ -784,7 +880,9 @@ function ensureCubes() {
   cubeList = new Array(MAXC).fill(null);
 }
 // throw n block-cubes from pos, colours picked from `colors`
+const farFx = (p) => G.camera && (p.x - G.camera.position.x) ** 2 + (p.z - G.camera.position.z) ** 2 > 270 * 270;
 export function cubeBurst(pos, n, colors, speed = 9, size = V * 0.9) {
+  if (farFx(pos)) return;
   ensureCubes();
   for (let q = 0; q < n; q++) {
     const i = cubeIdx = (cubeIdx + 1) % MAXC;
@@ -803,6 +901,7 @@ export function cubeBurst(pos, n, colors, speed = 9, size = V * 0.9) {
 }
 // one cube with its own start position / velocity (blocks falling off a building...)
 export function spawnCube(pos, vel, color, size = V * 0.9, life = 4) {
+  if (farFx(pos)) return;
   ensureCubes();
   const i = cubeIdx = (cubeIdx + 1) % MAXC;
   cubeList[i] = {

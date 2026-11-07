@@ -54,7 +54,7 @@ sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
 G.sun = sun;
 // underground (in a cave or tunnel), daylight fades out and your headlamp comes on
-const headlamp = new THREE.SpotLight(0xfff0d8, 0, 38, 0.62, 0.55, 1.1);
+const headlamp = new THREE.SpotLight(0xfff0d8, 0, 36, 0.66, 0.6, 1.0);
 scene.add(headlamp, headlamp.target);
 let underground = 0;
 const _fwd = new THREE.Vector3();
@@ -66,8 +66,8 @@ function updateUnderground(dt) {
   underground += (want - underground) * Math.min(1, dt * 2.5);
   if (underground < 0.002 && want === 0) { if (headlamp.intensity) { headlamp.intensity = 0; sun.intensity = G.baseSun ?? sun.intensity; hemi.intensity = G.baseHemi ?? hemi.intensity; } return; }
   sun.intensity = (G.baseSun ?? 2.2) * (1 - 0.92 * underground);
-  hemi.intensity = (G.baseHemi ?? 1.1) * (1 - 0.72 * underground);
-  headlamp.intensity = 70 * underground;
+  hemi.intensity = (G.baseHemi ?? 1.1) * (1 - 0.6 * underground);
+  headlamp.intensity = 8 * underground;
   headlamp.position.copy(c);
   headlamp.target.position.copy(c).add(_fwd.set(0, 0, -10).applyQuaternion(camera.quaternion));
 }
@@ -318,8 +318,11 @@ let physLoad = 0, budgetTick = 0;
 const AWAKE_MAX = 180;
 function sleepBudget() {
   const awake = [];
+  const pp = G.player ? G.player.body.position : null;
   for (const b of world.bodies) {
     if (b.type !== CANNON.Body.DYNAMIC || b.sleepState === CANNON.Body.SLEEPING || !b.allowSleep) continue;
+    // far from you and not flying: it waits until you come back
+    if (pp && (b.position.x - pp.x) ** 2 + (b.position.z - pp.z) ** 2 > 250 * 250 && b.velocity.lengthSquared() < 16 && !(b.ent && b.ent.kind === 'ragpart')) { b.sleep(); continue; }
     if (b.ent && (b.ent.kind === 'ragpart' || b.ent.thrusters.length || b.ent.antigrav > 0 || b.ent.carriedBy)) continue;
     if (G.grab && G.grab.body === b) continue;
     awake.push(b);
@@ -393,7 +396,15 @@ function frame() {
   G.player.update(rdt, pin);
   Items.updateEnts(dt);
   Items.updateFirePatches(dt);
-  for (const d of [...G.dummies]) if (!d.dead) d.update(dt);
+  // people far from you think less often (big maps)
+  const ppos = G.player.body.position;
+  for (const d of [...G.dummies]) {
+    if (d.dead) continue;
+    const o = d.state === 'standing' ? d.body.position : d.parts.torso.body.position;
+    d._acc = (d._acc || 0) + dt;
+    if ((o.x - ppos.x) ** 2 + (o.z - ppos.z) ** 2 > 150 * 150 && d._acc < 0.12) continue;
+    d.update(d._acc); d._acc = 0;
+  }
   updateProjectiles(dt);
   updateBlackHoles(dt);
   updateMap(dt);
