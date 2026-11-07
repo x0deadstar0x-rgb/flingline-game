@@ -81,8 +81,8 @@ function bhForce() {
       const dx = h.pos.x - b.position.x, dy = h.pos.y - b.position.y, dz = h.pos.z - b.position.z;
       const d = Math.hypot(dx, dy, dz);
       if (d > R || d < 0.01) continue;
-      // gets there: eaten (removed after the physics step)
-      if (sup && d < eatD && !b._eaten) { b._eaten = true; afterStep(() => eatBody(h, b)); continue; }
+      // gets there: eaten (removed after the physics step); fast things are caught as they pass
+      if (sup && d < eatD + b.velocity.length() / 60 && !b._eaten) { b._eaten = true; afterStep(() => eatBody(h, b)); continue; }
       let a = (P * (1 - d / R) + 12) * grow;
       if (sup) a *= 1 + 2.5 * clamp(1 - d / (h.size * 8 + 10), 0, 1); // much stronger close in
       if (b.isPlayer) a *= sup ? 0.45 : 0.35;
@@ -100,6 +100,8 @@ function bhForce() {
         b.velocity.x -= (b.velocity.x - dx * inv * vr) * k;
         b.velocity.y -= (b.velocity.y - dy * inv * vr) * k;
         b.velocity.z -= (b.velocity.z - dz * inv * vr) * k;
+        // and nothing gets away: speed away from it is dragged back (no slingshots out of reach)
+        if (vr < 0) { const k2 = 0.1 * (1 - k); b.velocity.x -= dx * inv * vr * k2; b.velocity.y -= dy * inv * vr * k2; b.velocity.z -= dz * inv * vr * k2; }
       }
       const sp = b.velocity.length();
       if (sp > vmax) b.velocity.scale(vmax / sp, b.velocity);
@@ -170,7 +172,7 @@ function updateSuperHole(h, dt) {
   if (t < h.life - 0.6) h.eatR += dt * (t < 5 ? 2 : (0.5 + 0.03 * h.eatR) * fed);
   const eatR = h.eatR;
   h.size = eatR / 2.4;                              // the black core
-  h.reach = eatR * 2.3 + 30;                        // how far away it pulls things in
+  h.reach = Math.max(80, eatR * 2.3 + 30);          // how far away it pulls things in
   h.sink.core = h.size;
   h.sink.r = Math.max(45, eatR * 1.9);
   // a milestone every time it grows by half again
@@ -189,7 +191,7 @@ function updateSuperHole(h, dt) {
   if (t >= h.life - 0.5) return;
   // Eating: the ground (and the buildings) inside its ball. A big ball is eaten a slice of rows
   // each frame (all of it every few frames), skipping the middle where everything is long gone.
-  const S = eatR < 25 ? 1 : eatR < 80 ? 4 : eatR < 200 ? 8 : 12;
+  const S = eatR < 12 ? 1 : eatR < 40 ? 3 : eatR < 100 ? 6 : eatR < 220 ? 10 : 14;
   if (S !== h.S) { h.S = S; h.slice = 0; h.passR = eatR; }
   const res = carveTerrain(h.pos, eatR, { sphere: true, slice: S > 1 ? [h.slice, S] : null, inner: h.inner });
   if (res && res.removed) {
@@ -208,10 +210,19 @@ function updateSuperHole(h, dt) {
     const H = Math.max(h.pos.y - groundBottom(), groundTop() - h.pos.y) + 2;
     h.inner = h.passR > H ? Math.sqrt(h.passR * h.passR - H * H) : 0;
     h.passR = eatR;
-    if (G.blastBuildings) { const n = G.blastBuildings(h.pos, eatR * 0.9, { quiet: true, scorch: false }) || 0; h.eaten += n; h.food += n; }
+    // the buildings in reach, one a frame (a whole tower inside the ball is a lot of blocks)
+    if (G.buildingsNear && !(h.bq && h.bq.length)) h.bq = G.buildingsNear(h.pos, eatR * 0.9).filter((o) => o.b.solid > 0).map((o) => ({ b: o.b, s: 0 }));
     // (the far-away view of a big map is redrawn now and then, so the hole shows from afar)
-    if (eatR > 60 && G.refreshFar && G.time - h.farT > 10) { h.farT = G.time; G.refreshFar(); }
+    if (eatR > 60 && G.refreshFar && G.time - h.farT > 20) { h.farT = G.time; G.refreshFar(); }
   }
+  if (h.bq && h.bq.length && G.blastOne) {
+    // (a building only partly inside is eaten a quarter of its floors at a time)
+    const q = h.bq.shift(), whole = G.inBall(q.b, h.pos, eatR * 0.9);
+    const n = G.blastOne(q.b, h.pos, eatR * 0.9, { quiet: true, scorch: false, debris: false, layers: whole ? null : [q.s, 4] });
+    h.eaten += n; h.food += n;
+    if (!whole && ++q.s < 4) h.bq.push(q);
+  }
+  if (G.blastBuildings && S === 1 && eatR > 4 && (h.bt = (h.bt || 0) + dt) > 0.3) { h.bt = 0; const n = G.blastBuildings(h.pos, eatR * 0.9, { quiet: true, scorch: false }) || 0; h.eaten += n; h.food += n; }
   // people nearby lose their footing; you get dragged
   const knockR = Math.max(40, eatR * 1.6);
   for (const d of G.dummies) if (d.state === 'standing' && d.center().distanceTo(h.pos) < knockR) d.knock(null);
@@ -412,3 +423,4 @@ export const boomTools = [
 ];
 
 export { detonate };
+G.__updBH = updateBlackHoles; // (for tests)

@@ -334,7 +334,8 @@ G.blockFloor = (x, y, z) => {
 function carve(b, x, y, z, R, opts = {}) {
   const reach = R * 1.8 + BV;
   const i0 = Math.max(0, Math.floor((x - reach - b.x0) / BV)), i1 = Math.min(b.nx - 1, Math.floor((x + reach - b.x0) / BV));
-  const j0 = Math.max(0, Math.floor((y - reach - b.y0) / BV)), j1 = Math.min(b.ny - 1, Math.floor((y + reach - b.y0) / BV));
+  let j0 = Math.max(0, Math.floor((y - reach - b.y0) / BV)), j1 = Math.min(b.ny - 1, Math.floor((y + reach - b.y0) / BV));
+  if (opts.layers) { const [sl, S] = opts.layers, n = j1 - j0 + 1; j1 = j0 + Math.floor(n * (sl + 1) / S) - 1; j0 += Math.floor(n * sl / S); }
   const k0 = Math.max(0, Math.floor((z - reach - b.z0) / BV)), k1 = Math.min(b.nz - 1, Math.floor((z + reach - b.z0) / BV));
   if (i0 > i1 || j0 > j1 || k0 > k1) return null;
   const scorch = opts.scorch ?? R > 1.4;
@@ -1028,6 +1029,37 @@ export function nukeBuilding(b, pos, f, s) {
   if (b.checkAt < 0) b.checkAt = G.time + 0.05;
 }
 // buildings near pos with their distance (nearest wall, on the ground)
+// one building loses the blocks inside a ball (the super black hole eats them one building a
+// frame); a building that's wholly inside it just goes, all at once
+G.blastOne = (b, pos, R, opts = {}) => {
+  if (b.solid <= 0) return 0;
+  let inside = true;
+  for (let c = 0; c < 8 && inside; c++) {
+    const x = b.x0 + (c & 1 ? b.nx * BV : 0), y = b.y0 + (c & 2 ? b.ny * BV : 0), z = b.z0 + (c & 4 ? b.nz * BV : 0);
+    if ((x - pos.x) ** 2 + (y - pos.y) ** 2 + (z - pos.z) ** 2 > R * R) inside = false;
+  }
+  if (inside) {
+    const n = b.solid;
+    for (const band of b.bands) {
+      if (band.body) { const old = band.body; _oldBox.copy(old.aabb); G.world.removeBody(old); band.body = null; moveTies(old, null, null); wakeIn(_oldBox); }
+      if (band.mesh) { band.mesh.geometry.dispose(); band.mesh.removeFromParent(); band.mesh = null; }
+      band.physDirty = false; band.meshDirty = false;
+    }
+    b.vox.fill(0); b.solid = 0; b.checkAt = -1;
+    return n;
+  }
+  const r = carve(b, pos.x, pos.y, pos.z, R, opts);
+  return r ? r.n : 0;
+};
+// is building b wholly inside the ball?
+G.inBall = (b, pos, R) => {
+  for (let c = 0; c < 8; c++) {
+    const x = b.x0 + (c & 1 ? b.nx * BV : 0), y = b.y0 + (c & 2 ? b.ny * BV : 0), z = b.z0 + (c & 4 ? b.nz * BV : 0);
+    if ((x - pos.x) ** 2 + (y - pos.y) ** 2 + (z - pos.z) ** 2 > R * R) return false;
+  }
+  return true;
+};
+G.buildingsNear = (pos, R) => buildingsNear(pos, R);
 export function buildingsNear(pos, R) {
   const out = [];
   for (const b of buildings) {
