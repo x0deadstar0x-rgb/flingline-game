@@ -5,28 +5,58 @@ import { G, GROUP, raycast, clamp, tv } from './core.js';
 import { buildHumanoid, poseHumanoid } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
-import { updateViewmodel, equipViewmodel } from './viewmodel.js';
+import { updateViewmodel, equipViewmodel, setViewmodelSkin } from './viewmodel.js';
+import { profileLook } from './look.js';
 
 export const SPAWN = new THREE.Vector3(0, 1.2, 34);
+const STAND = 0.9; // body centre height above the ground when standing
+
+// highest ground under the player: centre, four sides and one point ahead (in the direction of travel)
+const _o = new THREE.Vector3(), _e = new THREE.Vector3();
+function groundProbe(p, v) {
+  const hs = Math.hypot(v.x, v.z);
+  const ax = hs > 0.5 ? (v.x / hs) * 0.32 : 0, az = hs > 0.5 ? (v.z / hs) * 0.32 : 0;
+  let best = null;
+  for (const [dx, dz] of [[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2], [ax, az]]) {
+    _o.set(p.x + dx, p.y - 0.25, p.z + dz);
+    _e.set(p.x + dx, p.y - STAND - 0.75, p.z + dz);
+    const h = raycast(_o, _e, GROUP.STATIC | GROUP.DYN);
+    // too tall to step onto (a wall, a domino...): that's something you bump into, not ground
+    if (!h || h.normal.y < 0.5 || h.point.y > p.y - STAND + 0.62) continue;
+    if (!best || h.point.y > best.point.y) best = h;
+  }
+  return best;
+}
+// spring + damper towards standing height, applied every physics step while you're grounded
+G.extraForces.push(() => {
+  const pl = G.player;
+  if (!pl || !pl.hover) return;
+  const b = pl.body, h = pl.hover;
+  const err = h.y - b.position.y;
+  const vrel = b.velocity.y - h.vy;
+  const ay = clamp(err * 160 - vrel * 25, -45, 70);
+  b.applyForce(new CANNON.Vec3(0, b.mass * (9.82 + ay), 0));
+  // your weight pushes down on loose things you stand on (see-saws, pallets...)
+  if (h.body && h.body.type === CANNON.Body.DYNAMIC) {
+    const r = new CANNON.Vec3(h.point.x - h.body.position.x, h.point.y - h.body.position.y, h.point.z - h.body.position.z);
+    h.body.applyForce(new CANNON.Vec3(0, -b.mass * 9.82 * 0.7, 0), r);
+  }
+});
 
 export class Player {
   constructor() {
     const b = new CANNON.Body({ mass: 70, material: G.mats.player, fixedRotation: true, collisionFilterGroup: GROUP.PLAYER, allowSleep: false, linearDamping: 0 });
-    b.addShape(new CANNON.Sphere(0.4), new CANNON.Vec3(0, -0.5, 0));
-    b.addShape(new CANNON.Sphere(0.4), new CANNON.Vec3(0, 0.35, 0));
+    // the collision shape stops 0.55 m above your feet: a springy ground sensor holds you up,
+    // so you glide over block steps, seams and rubble instead of catching on them
+    b.addShape(new CANNON.Sphere(0.3), new CANNON.Vec3(0, -0.05, 0));
+    b.addShape(new CANNON.Sphere(0.38), new CANNON.Vec3(0, 0.35, 0));
     b.position.set(SPAWN.x, SPAWN.y, SPAWN.z);
     b.isPlayer = true;
     b.updateMassProperties();
     G.world.addBody(b);
     this.body = b;
-    this.meshes = buildHumanoid(1, { skin: 0xf1c27d, shirt: 0x1f8ef1, pants: 0x2b2d42, sleeve: true });
-    for (const k in this.meshes) G.scene.add(this.meshes[k]);
-    // cap
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.14, 0.54), new THREE.MeshStandardMaterial({ color: 0xff3b3b, flatShading: true }));
-    cap.position.y = 0.2;
-    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.25), cap.material);
-    brim.position.set(0, 0.15, 0.3);
-    this.meshes.head.add(cap, brim);
+    this.meshes = null;
+    this.applyLook(profileLook());
     this.yaw = 0; this.pitch = -0.1;
     this.camMode = 1; // first person only
     this.camDist = 5.5;
@@ -39,6 +69,14 @@ export class Player {
     this.swing = 0;
     this.camPos = new THREE.Vector3();
     this.fwd = new THREE.Vector3();
+  }
+
+  // your body (seen by other players) + your first-person arms follow your profile look
+  applyLook(look) {
+    if (this.meshes) for (const k in this.meshes) G.scene.remove(this.meshes[k]);
+    this.meshes = buildHumanoid(1, { skin: look.skin, shirt: look.shirt, pants: look.pants, sleeve: true, hat: look.hat, hatColor: look.hatColor });
+    for (const k in this.meshes) { this.meshes[k].visible = false; G.scene.add(this.meshes[k]); }
+    setViewmodelSkin({ skin: look.skin, shirt: look.shirt });
   }
 
   pos() { return tv(this.body.position); }
@@ -69,13 +107,18 @@ export class Player {
     const fwdFlat = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const p = b.position;
-    // ground check
-    const hit = raycast(new THREE.Vector3(p.x, p.y - 0.5, p.z), new THREE.Vector3(p.x, p.y - 1.08, p.z));
+    // ground sensor: the highest ground under you (and a little ahead, so steps lift you early)
+    this.jumpT = Math.max(0, (this.jumpT || 0) - dt);
+    const hit = this.flying ? null : groundProbe(p, b.velocity);
     // standing on a moving object? ride along with it
     const plat = hit && hit.body.type === CANNON.Body.DYNAMIC ? hit.body : null;
     this.platform = plat;
     const pv = plat ? plat.velocity : { x: 0, y: 0, z: 0 };
-    this.grounded = !!hit && b.velocity.y - pv.y < 6;
+    const standY = hit ? hit.point.y + STAND : 0;
+    const gap = hit ? p.y - standY : 1e9; // + above standing height, - below (a step up)
+    this.grounded = !!hit && gap < 0.4 && gap > -0.65 && b.velocity.y - pv.y < 5 && this.jumpT <= 0;
+    // the spring (applied every physics step) holds you at standing height while grounded
+    this.hover = this.grounded ? { y: standY, vy: pv.y, body: plat, point: hit.point } : null;
     if (this.grounded) this.airJumps = 1;
     const wl = G.waterAt(p.x, p.z);
     const swim = p.y < wl + 0.4;
@@ -105,7 +148,7 @@ export class Player {
       b.velocity.x += (tvx - b.velocity.x) * kk;
       b.velocity.z += (tvz - b.velocity.z) * kk;
     }
-    if (plat && this.grounded && !input.jump && !this.flying) b.velocity.y = Math.min(b.velocity.y, pv.y + 0.5);
+
     if (this.flying) {
       const vy = (input.jumpHeld ? 1 : 0) - (input.sprintDown ? 1 : 0);
       b.velocity.y = vy * 12;
@@ -116,10 +159,10 @@ export class Player {
     } else if (input.jump || (this.jumpBuf > 0 && this.grounded)) {
       // forgiving jumps: works a moment after walking off a ledge (coyote time)
       // and if you press jump just before landing (jump buffer)
-      if (this.grounded || this.coyote > 0) { b.velocity.y = pv.y + 8.5; sfx.jump(); this.coyote = 0; this.jumpBuf = 0; }
+      if (this.grounded || this.coyote > 0) { b.velocity.y = pv.y + 8.5; sfx.jump(); this.coyote = 0; this.jumpBuf = 0; this.jumpT = 0.25; this.hover = null; }
       else if (!input.jump) { /* buffered, wait for ground */ }
       else if (this.airJumps > 0) {
-        this.airJumps--; b.velocity.y = 8;
+        this.airJumps--; b.velocity.y = 8; this.jumpT = 0.25; this.hover = null;
         FX.smoke(this.feet(), 4, 0xffffff, 0.35); sfx.jump();
       }
     }
@@ -130,6 +173,8 @@ export class Player {
     this.wasGrounded = this.grounded;
     this.lastVy = b.velocity.y;
     if (p.y < (G.killY ?? -30)) this.respawn();
+    // safety net: never stay inside the ground
+    if (G.groundAt) { const gy = G.groundAt(p.x, p.z); if (gy > -1e8 && p.y - 0.9 < gy - 0.35) { b.position.y = gy + STAND + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; } }
 
     // camera
     const cp = Math.cos(this.pitch);
@@ -139,7 +184,7 @@ export class Player {
     const ip = b.interpolatedPosition;
     const ty = ip.y + 0.65 - (this.crouchT || 0) * 0.55;
     if (this.camY === undefined || Math.abs(ty - this.camY) > 1.5) this.camY = ty;
-    else this.camY += (ty - this.camY) * Math.min(1, dt * 22);
+    else this.camY += (ty - this.camY) * Math.min(1, dt * 13); // smooth over steps
     const pivot = new THREE.Vector3(ip.x, this.camY, ip.z);
     let cam;
     if (this.camMode === 1) {

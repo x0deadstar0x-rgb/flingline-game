@@ -1,3 +1,5 @@
+import { getP, setP } from './store.js';
+
 // Input: every game action can be bound to keys, mouse buttons or the wheel.
 // Presets: touchpad (no right click), touchpad with right click, mouse + keyboard.
 // Bindings are saved in the browser. Codes are KeyboardEvent.code values,
@@ -17,8 +19,8 @@ export const ACTIONS = [
   ['lookDown', 'Look down', 'Move'],
   ['lookLeft', 'Look left', 'Move'],
   ['lookRight', 'Look right', 'Move'],
-  ['grab', 'Fling Line: grab / drop', 'Fling Line'],
-  ['use', 'Use tool · throw what you hold', 'Tools'],
+  ['grab', 'Fling Line: grab · THROW what you hold', 'Fling Line'],
+  ['use', 'Use tool · drop what you hold', 'Tools'],
   ['reelIn', 'Line shorter (pull closer)', 'Fling Line'],
   ['reelOut', 'Line longer (push away)', 'Fling Line'],
   ['rotate', 'Rotate held thing (hold + mouse) · turn spawn', 'Fling Line'],
@@ -31,6 +33,7 @@ export const ACTIONS = [
   ['slot1', 'Hotbar 1', 'Hotbar'], ['slot2', 'Hotbar 2', 'Hotbar'], ['slot3', 'Hotbar 3', 'Hotbar'], ['slot4', 'Hotbar 4', 'Hotbar'], ['slot5', 'Hotbar 5', 'Hotbar'],
   ['slot6', 'Hotbar 6', 'Hotbar'], ['slot7', 'Hotbar 7', 'Hotbar'], ['slot8', 'Hotbar 8', 'Hotbar'], ['slot9', 'Hotbar 9', 'Hotbar'], ['slot10', 'Hotbar 10', 'Hotbar'],
   ['menu', 'Menu', 'Game'],
+  ['lockMouse', 'Lock / unlock the mouse', 'Game'],
   ['help', 'Controls screen', 'Game'],
   ['chat', 'Chat (multiplayer)', 'Game'],
   ['slowmo', 'Slow motion', 'Game'],
@@ -52,8 +55,8 @@ const BASE = {
   anchor: ['KeyQ'], nextItem: ['KeyT'], prevTool: ['Comma'], nextTool: ['Period'], undo: ['KeyU'], interact: ['KeyV'],
   slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'], slot4: ['Digit4'], slot5: ['Digit5'],
   slot6: ['Digit6'], slot7: ['Digit7'], slot8: ['Digit8'], slot9: ['Digit9'], slot10: ['Digit0'],
-  menu: ['Tab', 'KeyB'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
-  mute: ['KeyM'], quality: ['KeyL'], sensDown: ['BracketLeft'], sensUp: ['BracketRight'], photo: ['F1'],
+  menu: ['KeyE', 'Tab'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
+  mute: ['KeyM'], quality: ['KeyL'], sensDown: ['Minus'], sensUp: ['Equal'], lockMouse: ['BracketRight'], photo: ['F1'],
 };
 const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]]; for (const k in over) o[k] = over[k]; return o; };
 
@@ -62,9 +65,9 @@ const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]
 //  'reel'  line shorter / longer while holding something
 //  'smart' line length while holding, otherwise switch hotbar slot
 export const PRESETS = {
-  touchpad: { name: 'Touchpad (no right click)', desc: 'Click uses your tool (or throws what you hold), F grabs. Never needs a right click or two-finger click.', wheel: 'off', binds: with_({}) },
-  touchpad_rc: { name: 'Touchpad with right click', desc: 'Two-finger click grabs / drops with the Fling Line, click throws. Two-finger scroll changes the line length.', wheel: 'reel', binds: with_({ grab: ['KeyF', 'Mouse2'] }) },
-  mouse: { name: 'Mouse + keyboard', desc: 'Right click grabs / drops, left click throws or uses your tool, wheel changes the line length (or tool when not holding), middle button rotates.', wheel: 'smart', binds: with_({ grab: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['Comma', 'Mouse3'], nextTool: ['Period', 'Mouse4'] }) },
+  touchpad: { name: 'Touchpad (no right click)', desc: 'F grabs and throws, click uses your tool or drops what you hold, E opens the menu. Never needs a right click.', wheel: 'off', binds: with_({}) },
+  touchpad_rc: { name: 'Touchpad with right click', desc: 'Two-finger click grabs (and throws what you hold), click drops / uses your tool. Two-finger scroll changes the line length.', wheel: 'reel', binds: with_({ grab: ['KeyF', 'Mouse2'] }) },
+  mouse: { name: 'Mouse + keyboard', desc: 'Right click grabs, right click again throws, left click drops (or uses your tool). Wheel changes the line length, middle button rotates.', wheel: 'smart', binds: with_({ grab: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['Comma', 'Mouse3'], nextTool: ['Period', 'Mouse4'] }) },
 };
 
 export const binds = {};
@@ -72,7 +75,7 @@ export const ctl = { preset: 'touchpad', wheel: 'off' };
 
 function load() {
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem('fling_controls') || 'null'); } catch (e) { /* ignore */ }
+  saved = getP('controls');
   const preset = saved && PRESETS[saved.preset] ? saved.preset : 'touchpad';
   ctl.preset = preset;
   ctl.wheel = (saved && ['off', 'reel', 'smart'].includes(saved.wheel)) ? saved.wheel : PRESETS[preset].wheel;
@@ -85,11 +88,23 @@ function load() {
   }
   // a newly added action keeps its default key: take it off whatever had it before
   for (const id of fresh) for (const c of binds[id]) for (const k in binds) if (k !== id) binds[k] = binds[k].filter((x) => x !== c);
+  // controls saved before E opened the menu: give the menu E
+  // controls saved before ] locked the mouse: ] locks the mouse, sensitivity moves to - and =
+  if (saved && (saved.v || 1) < 3) {
+    for (const k in binds) if (k !== 'lockMouse') binds[k] = binds[k].filter((x) => x !== 'BracketRight' && x !== 'BracketLeft');
+    binds.lockMouse = ['BracketRight'];
+    if (!binds.sensDown.length) binds.sensDown = ['Minus'];
+    if (!binds.sensUp.length) binds.sensUp = ['Equal'];
+  }
+  if (saved && (saved.v || 1) < 2) {
+    for (const k in binds) binds[k] = binds[k].filter((x) => x !== 'KeyE');
+    binds.menu = ['KeyE', ...binds.menu.filter((x) => x !== 'KeyE')].slice(0, 3);
+  }
 }
 load();
 
 export function saveControls() {
-  try { localStorage.setItem('fling_controls', JSON.stringify({ preset: ctl.preset, wheel: ctl.wheel, binds })); } catch (e) { /* ignore */ }
+  setP('controls', { v: 3, preset: ctl.preset, wheel: ctl.wheel, binds });
 }
 export function applyPreset(id) {
   const p = PRESETS[id];

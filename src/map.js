@@ -168,7 +168,7 @@ function pallets(x, y, z, n = 3) { for (let i = 0; i < n; i++) put('pallet', x +
 
 // ------------------------------------------------------------- breakable terrain
 // The ground is made of 0.5 m block columns (terrain.js). Explosions carve blocky craters.
-const DIG_DEPTH = -40; // how deep you can dig (m)
+const DIG_DEPTH = -80; // how deep you can dig (m)
 function makeTerrain(opts) { createTerrain({ ...opts, bedrock: Math.min(opts.bedrock ?? -8, DIG_DEPTH) }, mapGroup, mapBodies); }
 export function groundHeight(x, z) { return terrainHeight(x, z); }
 const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0.48, 0.48], mat: 'dirt' };
@@ -178,7 +178,7 @@ const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0
 export function craterRadius(power) { return 1.9 * Math.pow(power, 0.55); }
 export function crater(pos, power, opts = {}) {
   const R = opts.craterRadius ?? craterRadius(power);
-  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.fire ? 0.6 : 0.85 });
+  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.fire ? 0.7 : 1.0 });
   if (!res) return null;
   const at = new THREE.Vector3(pos.x, res.ground, pos.z);
   const cols = res.sample.length ? res.sample : [0x6b4f35];

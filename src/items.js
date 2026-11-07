@@ -6,6 +6,11 @@ import { TEX } from './textures.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
 import { spawnDummy, dummyFromBody } from './dummy.js';
+import { styleFor, cutBox, pieceGeometry, INSIDE } from './fracture.js';
+import { cubeBurst } from './terrain.js';
+// copy a mesh's material (or each of its materials, for broken pieces)
+const cloneMat = (m) => (Array.isArray(m) ? m.map((x) => x.clone()) : m.clone());
+const shadeHex = (hex, f) => { const c = new THREE.Color(hex); c.r *= f; c.g *= f; c.b *= f; return c.getHex(); };
 
 // ---------------------------------------------------------------- materials
 export const MAT = {
@@ -333,6 +338,14 @@ export function buildMesh(def, color) {
     }
     return g;
   }
+  if (def.geo) {
+    // a broken piece: outside keeps the object's look, the broken inside shows raw material
+    const outer = visMat(def.mat, def.tex, color ?? def.color);
+    const inner = visMat(def.mat, null, INSIDE[def.mat] ?? shadeHex(MAT[def.mat]?.color ?? 0x888888, 1.1));
+    const m = new THREE.Mesh(def.geo, [outer, inner]);
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
   const m = new THREE.Mesh(makeGeo(def.shape, def), visMat(def.mat, def.tex, color ?? def.color));
   m.castShadow = true; m.receiveShadow = true;
   return m;
@@ -384,8 +397,13 @@ export function createEnt(def, pos, opts = {}) {
   if (opts.angVel) body.angularVelocity.set(opts.angVel.x, opts.angVel.y, opts.angVel.z);
   const mesh = buildMesh(def, opts.color);
   mesh.scale.setScalar(sc);
+  if (opts.gen) {
+    // broken pieces settle quickly; small ones ignore each other (rubble piles stay cheap)
+    body.sleepSpeedLimit = 0.5; body.sleepTimeLimit = 0.4;
+    if (volumeOf(def) * sc ** 3 < 0.06) { body.collisionFilterGroup = GROUP.DEBRIS; body.collisionFilterMask = ~GROUP.DEBRIS; }
+  }
   const ent = {
-    id: nextId++, kind: 'item', def, mat, body, mesh,
+    id: nextId++, kind: 'item', def, mat, body, mesh, vol: volumeOf(def) * sc ** 3,
     hp: def.explosive ? def.explosive.hp : (def.hp ?? mat.hp),
     gen: opts.gen ?? 0, born: G.time, spawned: !!opts.spawned, scale: sc,
     frozen: 0, antigrav: 0, thrusters: [], wet: false,
@@ -407,7 +425,7 @@ export function syncEnt(e) {
 }
 
 function enforceLimit() {
-  if (G.ents.size < 650) return;
+  if (G.ents.size < 560) return;
   // remove the oldest small debris first
   let oldest = null;
   for (const e of G.ents) if (e.kind === 'item' && e.gen > 0 && (!oldest || e.born < oldest.born)) oldest = e;
@@ -428,6 +446,7 @@ export function removeEnt(ent, quiet = false) {
   }
   G.world.removeBody(ent.body);
   G.scene.remove(ent.mesh);
+  if (ent.def && ent.def.geo) ent.def.geo.dispose();
   G.ents.delete(ent);
   if (!quiet) wakeAround(ent.body.position, 4);
 }
@@ -464,12 +483,16 @@ function onCollide(e) {
     const om = e.body.type === CANNON.Body.DYNAMIC ? e.body.mass : 1000;
     const ratio = clamp(om / ent.body.mass, 0.3, 2.5);
     const dmg = (v - thr) * 7 * ratio;
-    afterStep(() => damage(ent, dmg, null));
+    const c = e.contact, self = c.bi === e.target;
+    const cp = self ? c.bi.position.vadd(c.ri) : c.bj.position.vadd(c.rj);
+    const at = new THREE.Vector3(cp.x, cp.y, cp.z);
+    const n = new THREE.Vector3(c.ni.x, c.ni.y, c.ni.z).multiplyScalar(self ? 1 : -1);
+    afterStep(() => damage(ent, dmg, n, at));
   }
 }
 
 // ---------------------------------------------------------------- damage
-export function damage(ent, dmg, dir) {
+export function damage(ent, dmg, dir, at = null) {
   if (!ent || ent.dead) return;
   if (ent.unbreakable && !(ent.def && ent.def.explosive)) return;
   if (ent.kind === 'ragpart') { ent.dummy.hurt(dmg, dir); return; }
@@ -482,15 +505,15 @@ export function damage(ent, dmg, dir) {
     return;
   }
   if (ent.hp === Infinity) {
-    if (ent.frozen && dmg > 30) breakEnt(ent, dir);
+    if (ent.frozen && dmg > 30) breakEnt(ent, dir, dmg / 30, at);
     return;
   }
   ent.hp -= dmg;
-  if (ent.hp <= 0) breakEnt(ent, dir);
+  if (ent.hp <= 0) breakEnt(ent, dir, Math.min(6, -ent.hp / 20), at);
 }
 
 const _q = new THREE.Quaternion();
-export function breakEnt(ent, dir, extra = 0) {
+export function breakEnt(ent, dir, extra = 0, at = null) {
   if (ent.dead || ent.unbreakable) return;
   const def = ent.def;
   const mat = ent.frozen ? MAT.ice : ent.mat;
@@ -503,12 +526,13 @@ export function breakEnt(ent, dir, extra = 0) {
   const keep = attachmentsOf(ent.body);
   removeEnt(ent);
   const brk = ent.frozen ? 'shards' : mat.brk;
-  if (brk === 'shards') {
+  if (brk === 'shards' && ent.gen > 0) {
+    // a shard breaking again: just glitter
     sfx.shatter(pos);
-    for (let i = 0; i < 26; i++) FX.particle({ pos: pos.clone().add(new THREE.Vector3(rand(-0.5, 0.5), rand(-0.5, 0.5), rand(-0.5, 0.5))), vel: vel.clone().add(new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4))), color: mat.color, size: rand(0.08, 0.22), life: rand(0.8, 1.5), gravity: 18, opacity: 0.8, spin: 8 });
-    if (def.mat === 'crystal') FX.confetti(pos, 20, 6);
+    for (let i = 0; i < 14; i++) FX.particle({ pos: pos.clone().add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.3, 0.3), rand(-0.3, 0.3))), vel: vel.clone().add(new THREE.Vector3(rand(-3, 3), rand(0, 4), rand(-3, 3))), color: mat.color, size: rand(0.06, 0.16), life: rand(0.6, 1.2), gravity: 18, opacity: 0.8, spin: 8 });
     return;
   }
+  if (brk === 'shards') sfx.shatter(pos);
   if (brk === 'crumble') {
     sfx.crumble(pos);
     FX.debris(pos, color, 12, 0.14, 4);
@@ -521,10 +545,10 @@ export function breakEnt(ent, dir, extra = 0) {
     FX.debris(pos, 0x2f7a22, 8, 0.15, 5);
     return;
   }
-  if (['stone', 'brick', 'rock', 'concrete'].includes(def.mat)) sfx.crumble(pos); else sfx.crack(pos);
-  FX.debris(pos, mat.color, 10, 0.18, 5);
-  FX.smoke(pos, 2, 0x9b8b70, 0.5);
+  const style = ent.frozen ? 'ice' : styleFor(def.mat);
+  if (style === 'splinter') sfx.crack(pos); else if (style === 'ice') sfx.shatter(pos); else sfx.crumble(pos);
   if (def.special === 'present') {
+    FX.debris(pos, mat.color, 10, 0.18, 5);
     const pool = ['ball', 'duck', 'melon', 'balloon', 'dice', 'tnt_mini', 'firework', 'gold', 'beachball', 'crystal', 'pumpkin', 'dummy_tiny', 'jelly'];
     FX.confetti(pos, 40, 8);
     for (let i = 0; i < 3; i++) {
@@ -533,23 +557,45 @@ export function breakEnt(ent, dir, extra = 0) {
     }
     return;
   }
-  // split into smaller pieces
+  // how hard it was hit (a knock ~0.3 .. a blast ~2) and where (in the object's own coordinates)
+  const E = clamp(0.3 + extra / 4, 0.25, 2.3);
+  _q.copy(ent.mesh.quaternion);
+  const qi = _q.clone().invert();
+  let impW = at ? at.clone() : dir ? pos.clone().addScaledVector(dir, -0.5) : pos.clone();
+  const impL = impW.clone().sub(pos).applyQuaternion(qi);
+  // too much debris around? break into fewer pieces (and more dust)
+  let debris = 0;
+  for (const o of G.ents) if (o.gen > 0) debris++;
+  const crowded = debris > 160;
+  const dust = mat.color;
+  // dust + grit
+  if (style !== 'splinter') FX.smoke(pos, 2 + Math.round(E * 2), style === 'ice' ? 0xdff6ff : 0x9b8b70, 0.45 + E * 0.15);
+  cubeBurst(impW, Math.round(4 + E * 8), [dust, shadeHex(dust, 0.8)], 3 + E * 3, style === 'splinter' ? 0.08 : 0.11);
   const pieces = [];
-  if (def.shape === 'box') {
+  if (def.shape === 'box' && ent.gen < 2) {
     const sc = ent.scale;
     const s = def.size.map((x) => x * sc);
-    const n = s.map((x) => (x >= (mat.min ?? 0.25) * 2 ? 2 : 1));
-    if (n[0] * n[1] * n[2] > 1 && ent.gen < 3) {
-      const ps = [s[0] / n[0], s[1] / n[1], s[2] / n[2]];
-      _q.copy(ent.mesh.quaternion);
-      for (let i = 0; i < n[0]; i++) for (let j = 0; j < n[1]; j++) for (let k = 0; k < n[2]; k++) {
-        const off = new THREE.Vector3((i + 0.5) * ps[0] - s[0] / 2, (j + 0.5) * ps[1] - s[1] / 2, (k + 0.5) * ps[2] - s[2] / 2).applyQuaternion(_q);
-        pieces.push({ def: { ...ITEMS.chunk, size: ps.map((x) => x * 0.98), mat: def.mat, tex: def.tex, color: def.color === 'random' ? undefined : def.color, hp: undefined }, pos: pos.clone().add(off), off });
-      }
-    }
+    const h = s.map((x) => x / 2);
+    const imp = [clamp(impL.x, -h[0], h[0]), clamp(impL.y, -h[1], h[1]), clamp(impL.z, -h[2], h[2])];
+    const maxP = crowded ? 3 : ent.gen === 0 ? (style === 'shatter' ? 7 : 9) : 4;
+    const minSize = Math.max(0.08, Math.min(...s) * (style === 'splinter' ? 0.12 : 0.2), style === 'shatter' ? 0.12 : 0);
+    const cuts = cutBox(s, imp, style, E, maxP, minSize);
+    // glass: only the biggest shards stay as solid pieces, the rest are glitter
+    cuts.sort((a, b) => b.s[0] * b.s[1] * b.s[2] - a.s[0] * a.s[1] * a.s[2]);
+    cuts.forEach((c, i) => {
+      const vol = c.s[0] * c.s[1] * c.s[2];
+      const off = new THREE.Vector3(...c.c).applyQuaternion(_q);
+      const keep = vol > 0.0025 && !(style === 'shatter' && i >= 4) && !(crowded && vol < 0.02);
+      if (!keep) { cubeBurst(pos.clone().add(off), 2, [dust], 3 + E * 2, Math.min(0.14, Math.cbrt(vol))); return; }
+      // where this piece sits inside the original object (so its texture lines up), across generations
+      const uvS = def.uvS || s, base = def.uvOff || [0, 0, 0];
+      const uvOff = [base[0] + c.c[0], base[1] + c.c[1], base[2] + c.c[2]];
+      const geo = pieceGeometry(c.s, uvOff, uvS);
+      pieces.push({ def: { ...ITEMS.chunk, size: c.s.map((x) => x * 0.98), mat: def.mat, tex: def.tex, color: def.color === 'random' ? undefined : def.color, hp: undefined, geo, uvS, uvOff }, pos: pos.clone().add(off), off });
+    });
+    if (style === 'shatter' || style === 'ice') for (let i = 0; i < 18; i++) FX.particle({ pos: impW.clone().add(new THREE.Vector3(rand(-0.4, 0.4), rand(-0.4, 0.4), rand(-0.4, 0.4))), vel: vel.clone().add(new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4))), color: mat.color, size: rand(0.06, 0.16), life: rand(0.7, 1.3), gravity: 18, opacity: 0.8, spin: 8 });
   } else if (def.shape === 'compound' && ent.gen < 1) {
     const sc = ent.scale;
-    _q.copy(ent.mesh.quaternion);
     for (const p of def.parts) {
       const off = new THREE.Vector3(...p.off).multiplyScalar(sc).applyQuaternion(_q);
       const pd = p.t === 'box'
@@ -557,17 +603,27 @@ export function breakEnt(ent, dir, extra = 0) {
         : { id: 'chunk', shape: p.t, r: p.r * sc, h: (p.h ?? 1) * sc, rt: p.rt ? p.rt * sc : undefined, mat: def.mat, color: p.color, tex: p.tex };
       pieces.push({ def: pd, pos: pos.clone().add(off), off, quat: _q.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...(p.rot || [0, 0, 0])))) });
     }
+  } else if (style === 'shatter') {
+    for (let i = 0; i < 26; i++) FX.particle({ pos: pos.clone().add(new THREE.Vector3(rand(-0.5, 0.5), rand(-0.5, 0.5), rand(-0.5, 0.5))), vel: vel.clone().add(new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4))), color: mat.color, size: rand(0.08, 0.22), life: rand(0.8, 1.5), gravity: 18, opacity: 0.8, spin: 8 });
   }
+  if (def.mat === 'crystal') FX.confetti(pos, 20, 6);
   const made = [];
+  const impOff = impW.clone().sub(pos);
   for (const p of pieces) {
-    const out = p.off.clone().normalize().multiplyScalar(rand(1, 3) + extra);
-    if (dir) out.addScaledVector(dir, 2 + extra * 0.5);
+    const away = p.off.clone().sub(impOff);
+    if (away.lengthSq() < 1e-4) away.set(rand(-1, 1), rand(0, 1), rand(-1, 1));
+    const out = away.normalize().multiplyScalar(rand(0.8, 2.2) + E * 2.2 + extra * 0.25);
+    out.y += rand(0.5, 1.5);
+    if (dir) out.addScaledVector(dir, 1 + E * 1.5);
     const pe = createEnt(p.def, p.pos, {
       quat: p.quat || ent.mesh.quaternion, vel: vel.clone().add(out),
-      angVel: new THREE.Vector3(rand(-3, 3), rand(-3, 3), rand(-3, 3)),
+      angVel: new THREE.Vector3(rand(-3, 3), rand(-3, 3), rand(-3, 3)).multiplyScalar(0.6 + E * 0.6),
       gen: ent.gen + 1, spawned: true,
     });
-    pe.hp = Math.max(8, (mat.hp === Infinity ? 100 : mat.hp) * 0.5 ** (ent.gen + 1));
+    // smaller pieces are weaker
+    const v = volumeOf(p.def);
+    pe.hp = Math.max(6, (mat.hp === Infinity ? 100 : mat.hp) * clamp(Math.cbrt(v) * 1.2, 0.15, 0.7));
+    if (brk === 'shards') pe.hp = 3;
     made.push(pe);
   }
   reattach(keep, made);
@@ -670,7 +726,7 @@ export function explode(pos, power = 1, opts = {}) {
   G.shake = Math.min(2.5, G.shake + Math.max(0, power * 1.4 - pd / (18 * Math.sqrt(power))));
   G.stats.booms++;
   G.lastBoom.pos.copy(pos); G.lastBoom.time = G.time;
-  if (G.time - lastExplTime < 0.7) { chainCount++; if (chainCount >= 2) popup(`CHAIN x${chainCount + 1}!`, pos.clone().add(new THREE.Vector3(0, 2, 0)), '#ffcf3a', 26 + chainCount * 2); }
+  if (G.time - lastExplTime < 0.7) chainCount++; // (no more "CHAIN x3!" text in the way)
   else chainCount = 0;
   lastExplTime = G.time;
 
@@ -708,8 +764,9 @@ export function explode(pos, power = 1, opts = {}) {
     if (e.kind === 'ragpart') { if (e.partName === 'torso') e.dummy.hurt(f * 115 * Math.sqrt(power), dir); continue; }
     if (e.def.explosive) { detonate(e, rand(0.08, 0.22)); continue; }
     const dmg = 140 * Math.sqrt(power) * f;
-    if (e.hp !== Infinity && e.hp - dmg <= 0) breakEnt(e, dir, V * f * 0.4);
-    else damage(e, dmg, dir);
+    const at = tv(e.body.position).addScaledVector(dir, -0.4);
+    if (e.hp !== Infinity && e.hp - dmg <= 0) breakEnt(e, dir, V * f * 0.4, at);
+    else damage(e, dmg, dir, at);
   }
   wakeAround(pos, R * 1.5);
 }
@@ -872,6 +929,11 @@ export function updateEnts(dt) {
       if (e.kind === 'ragpart') e.dummy.respawn(); else removeEnt(e, true);
       continue;
     }
+    // safety net: something that slipped into the ground is put back on top
+    if (b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC && G.groundAt) {
+      const gy = G.groundAt(b.position.x, b.position.z);
+      if (gy > -1e8 && b.position.y < gy - 0.6 && b.position.y > (G.killY ?? -100) + 5) { b.position.y = gy + 0.6; if (b.velocity.y < 0) b.velocity.y *= -0.2; }
+    }
     // sleeping bodies don't move: skip syncing them (keeps idle cost near zero)
     if (e.kind !== 'ragpart' && b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC) syncEnt(e);
     if (e.burn > 0) updateBurn(e, dt);
@@ -902,8 +964,9 @@ export function updateEnts(dt) {
       if (e.fuse <= 0) { e.fuse = null; if (e.onFuse) e.onFuse(); else detonate(e, 0); }
     }
     if (e.def.special === 'balloon' && b.position.y > 700) popBalloon(e); // way up high, out of air
-    if (e.gen >= 2 && G.time - e.born > 25) {
-      const k = (G.time - e.born - 25);
+    const life = e.gen >= 2 ? 12 : e.gen === 1 && (e.vol ?? 1) < 0.03 ? 20 : 1e9;
+    if (G.time - e.born > life) {
+      const k = (G.time - e.born - life);
       e.mesh.scale.setScalar(e.scale * Math.max(0.01, 1 - k));
       if (k >= 1) removeEnt(e, true);
     }
@@ -964,8 +1027,8 @@ export function paint(ent) {
   const c = new THREE.Color().setHSL(Math.random(), 0.85, 0.55);
   ent.mesh.traverse((m) => {
     if (!m.isMesh) return;
-    m.material = m.material.clone();
-    m.material.color.copy(c);
+    m.material = cloneMat(m.material);
+    for (const mm of [].concat(m.material)) mm.color.copy(c);
   });
 }
 
@@ -1246,7 +1309,7 @@ export function ignite(e, t = 8) {
     if (e.fuse == null && !e.detonating) e.fuse = rand(0.7, 1.5);
   }
   if (!(e.burn > 0)) {
-    e.mesh.traverse((m) => { if (m.isMesh && !m.userData.charClone) { m.material = m.material.clone(); m.userData.charClone = true; } });
+    e.mesh.traverse((m) => { if (m.isMesh && !m.userData.charClone) { m.material = cloneMat(m.material); m.userData.charClone = true; } });
     G.burning = (G.burning || 0) + 1;
   }
   e.burn = Math.max(e.burn || 0, t * f);
@@ -1267,7 +1330,7 @@ function updateBurn(e, dt) {
   if (Math.random() < 0.7) FX.particle({ pos: p.clone().add(new THREE.Vector3(rand(-0.4, 0.4) * sz, rand(0, 0.4) * sz, rand(-0.4, 0.4) * sz)), vel: new THREE.Vector3(rand(-0.5, 0.5), rand(2, 4), rand(-0.5, 0.5)), color: Math.random() < 0.5 ? 0xff7a1a : 0xffc04a, size: rand(0.2, 0.4) * Math.min(2, sz), life: rand(0.4, 0.8), glow: true, add: true, gravity: -2, drag: 1, floor: false });
   if (Math.random() < 0.15) sfx.fire(p);
   if (Math.random() < 0.08) FX.smoke(p.clone().add(new THREE.Vector3(0, sz * 0.6, 0)), 1, 0x333333, 0.5 * Math.min(2, sz));
-  e.mesh.traverse((m) => { if (m.isMesh && m.userData.charClone) m.material.color.lerp(_black, dt * 0.12); });
+  e.mesh.traverse((m) => { if (m.isMesh && m.userData.charClone) for (const mm of [].concat(m.material)) mm.color.lerp(_black, dt * 0.12); });
   if (e.hp !== Infinity && !e.def.explosive) { e.hp -= dt * 9; if (e.hp <= 0) { G.burning--; e.burn = 0; breakEnt(e, null); return; } }
   if (e.def.mat === 'car' && e.burn < 2 && !e.carBoom) { e.carBoom = true; later(0.1, () => { if (!e.dead) { const pp = tv(e.body.position); removeEnt(e, true); explode(pp, 1.6, { fire: true }); } }); }
   e.spreadT -= dt;

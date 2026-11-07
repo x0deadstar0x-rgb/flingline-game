@@ -2,11 +2,13 @@
 // Menu: sidebar (Tools / Items / Maps / Controls), search, and a hotbar editor:
 // click a slot, then click tools to fill it. TAB / Esc / "Play" closes.
 import { G, toast } from './core.js';
-import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR } from './tools/index.js';
+import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR, PRESET_LOADOUTS } from './tools/index.js';
 import { CATALOG, ITEMS } from './items.js';
 import { MAPS, loadMap } from './map.js';
 import { S, setSetting, DEFAULTS } from './settings.js';
 import { thumb } from './thumbs.js';
+import { getP, setP, listProfiles, activeProfile, createProfile, renameProfile, switchProfile, deleteProfile } from './store.js';
+import { profileLook, setProfileLook, HATS, SKIN_COLORS, CLOTH_COLORS } from './look.js';
 import { bindText, ACTIONS, PRESETS, binds, ctl, applyPreset, setBind, keyName, captureNext, saveControls } from './input.js';
 
 const $ = (id) => document.getElementById(id);
@@ -21,12 +23,14 @@ export const UI = {
 };
 
 try {
-  const saved = (JSON.parse(localStorage.getItem('fling_hotbar') || 'null') || null);
+  const saved = getP('hotbar');
   // the Fling Line used to be a tool; it is always with you now
   if (Array.isArray(saved)) for (let i = 0; i < saved.length; i++) if (saved[i] === 'fling') saved[i] = 'hands';
   if (Array.isArray(saved) && saved.length === 10 && saved.every((id) => TOOL[id])) UI.hotbar = saved;
 } catch (e) { /* ignore */ }
-function saveHotbar() { try { localStorage.setItem('fling_hotbar', JSON.stringify(UI.hotbar)); } catch (e) { /* ignore */ } }
+function saveHotbar() { setP('hotbar', UI.hotbar); setP('slot', UI.slot); setP('spawnId', G.spawnId); }
+// the slot you had selected and the thing you were spawning come back too
+{ const sl = getP('slot'); if (Number.isInteger(sl) && sl >= 0 && sl < 10) UI.slot = sl; const sid = getP('spawnId'); if (sid && ITEMS[sid]) G.spawnId = sid; }
 
 export function currentTool() { return TOOL[UI.hotbar[UI.slot]]; }
 const slotIcon = (id) => (id === 'spawner' ? ITEMS[G.spawnId].icon : TOOL[id].icon);
@@ -65,6 +69,7 @@ export function selectSlot(i) {
   if (i === UI.slot) return;
   const prev = currentTool();
   UI.slot = i;
+  setP('slot', i);
   equipChanged(prev);
 }
 
@@ -160,6 +165,90 @@ function renderSettings(body) {
   wrap.appendChild(reset);
 }
 
+// Profile: who's playing, how you look, your stats
+let newProfile = false;
+function renderProfile(body) {
+  const wrap = document.createElement('div');
+  wrap.className = 'settings profile';
+  body.appendChild(wrap);
+  const me = activeProfile();
+  // look + preview
+  const look = profileLook();
+  const top = document.createElement('div'); top.className = 'ptop';
+  const prev = document.createElement('div'); prev.className = 'avatar';
+  const key = 'avatar:' + JSON.stringify(look);
+  const url = thumb(key, (u) => { if (u) { const im = prev.querySelector('img'); if (im) im.src = u; } });
+  prev.innerHTML = `<img alt="" src="${url || ''}">`;
+  top.appendChild(prev);
+  const info = document.createElement('div'); info.className = 'pinfo';
+  const name = document.createElement('input'); name.className = 'pname'; name.value = me.name; name.maxLength = 24;
+  name.onchange = () => { renameProfile(me.id, name.value); renderMenu(); };
+  name.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') name.blur(); };
+  info.appendChild(name);
+  const st = G.stats;
+  info.insertAdjacentHTML('beforeend', `<div class="pstats"><span>BEST FLING <b>${st.best.toFixed(1)} m</b></span><span>BOOMS <b>${st.booms}</b></span><span>BROKEN <b>${st.destroyed}</b></span><span>KOS <b>${st.kos || 0}</b></span></div>`);
+  top.appendChild(info);
+  wrap.appendChild(top);
+  const swatches = (label, key, colors) => {
+    const r = document.createElement('div'); r.className = 'srow';
+    r.innerHTML = `<div class="sl"><div class="n">${esc(label)}</div></div>`;
+    const box = document.createElement('div'); box.className = 'sw';
+    for (const c of colors) {
+      const b = document.createElement('button');
+      b.className = 'swatch' + (look[key] === c ? ' on' : '');
+      b.style.background = '#' + c.toString(16).padStart(6, '0');
+      b.onclick = (e) => { e.stopPropagation(); setProfileLook({ [key]: c }); renderMenu(); };
+      box.appendChild(b);
+    }
+    r.appendChild(box); wrap.appendChild(r);
+  };
+  swatches('Skin', 'skin', SKIN_COLORS);
+  swatches('Shirt', 'shirt', CLOTH_COLORS);
+  swatches('Pants', 'pants', CLOTH_COLORS);
+  const hr = document.createElement('div'); hr.className = 'srow';
+  hr.innerHTML = '<div class="sl"><div class="n">Hat</div></div>';
+  const hs = document.createElement('div'); hs.className = 'sctl seg';
+  for (const [id, label] of HATS) {
+    const b = document.createElement('button'); b.textContent = label; b.className = look.hat === id ? 'on' : '';
+    b.onclick = (e) => { e.stopPropagation(); setProfileLook({ hat: id }); renderMenu(); };
+    hs.appendChild(b);
+  }
+  hr.appendChild(hs); wrap.appendChild(hr);
+  swatches('Hat colour', 'hatColor', CLOTH_COLORS);
+  // all profiles
+  const h = document.createElement('h3'); h.textContent = 'Profiles on this computer'; wrap.appendChild(h);
+  for (const p of listProfiles()) {
+    const r = document.createElement('div'); r.className = 'krow';
+    r.innerHTML = `<div class="kl">${esc(p.name)}${p.active ? ' <span class="badge2">PLAYING</span>' : ''}</div>`;
+    const box = document.createElement('div'); box.className = 'kbox';
+    if (!p.active) {
+      const sw = document.createElement('button'); sw.className = 'kb'; sw.textContent = 'Switch';
+      sw.onclick = (e) => { e.stopPropagation(); switchProfile(p.id); };
+      box.appendChild(sw);
+    }
+    if (listProfiles().length > 1) {
+      const del = document.createElement('button'); del.className = 'kb'; del.textContent = 'Delete';
+      del.onclick = (e) => { e.stopPropagation(); if (del.dataset.sure) { deleteProfile(p.id); renderMenu(); } else { del.dataset.sure = 1; del.textContent = 'Sure?'; } };
+      box.appendChild(del);
+    }
+    r.appendChild(box); wrap.appendChild(r);
+  }
+  if (newProfile) {
+    const r = document.createElement('div'); r.className = 'krow';
+    const inp = document.createElement('input'); inp.className = 'pname small'; inp.placeholder = 'New profile name'; inp.maxLength = 24;
+    const ok = document.createElement('button'); ok.className = 'kb'; ok.textContent = 'Create & switch';
+    const go = () => { const id = createProfile(inp.value); newProfile = false; switchProfile(id); };
+    ok.onclick = (e) => { e.stopPropagation(); go(); };
+    inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') go(); };
+    r.append(inp, ok); wrap.appendChild(r);
+    setTimeout(() => inp.focus(), 0);
+  } else {
+    const add = document.createElement('button'); add.className = 'sreset'; add.textContent = '+ New profile';
+    add.onclick = (e) => { e.stopPropagation(); newProfile = true; renderMenu(); };
+    wrap.appendChild(add);
+  }
+}
+
 // Controls: presets + rebind every action (keys, mouse buttons)
 let waiting = null; // [action, slot] being rebound
 function renderControls(body) {
@@ -227,6 +316,54 @@ function renderControls(body) {
   wrap.appendChild(reset);
 }
 
+// Loadouts: ready-made hotbars + your own saved ones (kept in your profile)
+function applyLoadout(tools) {
+  const prev = currentTool();
+  UI.hotbar = tools.map((id) => (TOOL[id] ? id : 'hands')).slice(0, 10);
+  while (UI.hotbar.length < 10) UI.hotbar.push('hands');
+  saveHotbar();
+  equipChanged(prev);
+}
+let savingLoadout = false;
+function renderLoadouts(body) {
+  const wrap = document.createElement('div');
+  wrap.className = 'loadouts';
+  const title = document.createElement('div'); title.className = 'lt'; title.textContent = 'LOADOUTS';
+  wrap.appendChild(title);
+  const mine = getP('loadouts', []);
+  const chip = (name, tools, custom, i) => {
+    const b = document.createElement('button');
+    const same = tools.join(',') === UI.hotbar.join(',');
+    b.className = 'chip' + (same ? ' on' : '') + (custom ? ' mine' : '');
+    b.innerHTML = `<b>${esc(name)}</b>${custom ? '<span class="x" title="Delete">×</span>' : ''}`;
+    b.title = tools.map((id) => (TOOL[id] ? TOOL[id].name : id)).join(', ');
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (custom && e.target.classList.contains('x')) { mine.splice(i, 1); setP('loadouts', mine); renderMenu(); return; }
+      applyLoadout(tools); renderMenu(); toast(`Loadout: ${name}`);
+    };
+    wrap.appendChild(b);
+  };
+  PRESET_LOADOUTS.forEach((l) => chip(l.name, l.tools, false));
+  mine.forEach((l, i) => chip(l.name, l.tools, true, i));
+  if (savingLoadout) {
+    const inp = document.createElement('input');
+    inp.className = 'lname'; inp.placeholder = 'Name your loadout'; inp.maxLength = 20;
+    const ok = document.createElement('button'); ok.className = 'chip on'; ok.innerHTML = '<b>Save</b>';
+    const save = () => { const n = inp.value.trim() || `My loadout ${mine.length + 1}`; mine.push({ name: n, tools: [...UI.hotbar] }); setP('loadouts', mine.slice(-20)); savingLoadout = false; renderMenu(); toast(`Saved loadout: ${n}`); };
+    ok.onclick = (e) => { e.stopPropagation(); save(); };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } e.stopPropagation(); };
+    wrap.append(inp, ok);
+    setTimeout(() => inp.focus(), 0);
+  } else {
+    const add = document.createElement('button');
+    add.className = 'chip'; add.innerHTML = '<b>+ Save current</b>';
+    add.onclick = (e) => { e.stopPropagation(); savingLoadout = true; renderMenu(); };
+    wrap.appendChild(add);
+  }
+  body.appendChild(wrap);
+}
+
 function renderHotbarEditor() {
   const row = $('hbedit');
   row.innerHTML = '';
@@ -249,7 +386,8 @@ export function renderMenu() {
   renderHotbarEditor();
   if (UI.tab === 'tools') {
     $('menutitle').textContent = 'Tools';
-    $('menusub').textContent = `Pick a slot above, then click a tool to put it there. ${TOOLS.length} tools.`;
+    $('menusub').textContent = `Pick a slot above, then click a tool to put it there. ${TOOLS.length} tools. Your hotbar is saved in your profile.`;
+    renderLoadouts(body);
     for (const [name, list] of TOOL_GROUPS) {
       const l = list.filter((t) => match(t.name, t.hint, name));
       if (!l.length) continue;
@@ -278,7 +416,7 @@ export function renderMenu() {
       if (!l.length) continue;
       const grid = section(body, c, l.length);
       grid.classList.add('small');
-      for (const d of l) grid.appendChild(card(d.icon, d.name, '', () => { G.spawnId = d.id; setTool('spawner'); closeMenu(); toast(`Spawner · ${d.name}`); }, G.spawnId === d.id, '', 'item:' + d.id));
+      for (const d of l) grid.appendChild(card(d.icon, d.name, '', () => { G.spawnId = d.id; setP('spawnId', d.id); setTool('spawner'); closeMenu(); toast(`Spawner · ${d.name}`); }, G.spawnId === d.id, '', 'item:' + d.id));
     }
   } else if (UI.tab === 'maps') {
     $('menutitle').textContent = 'Maps';
@@ -286,6 +424,10 @@ export function renderMenu() {
     const grid = section(body, 'All maps');
     grid.classList.add('wide');
     for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, () => { loadMap(m.id); closeMenu(); toast(m.name); }, G.mapId === m.id));
+  } else if (UI.tab === 'profile') {
+    $('menutitle').textContent = 'Profile';
+    $('menusub').textContent = 'Everyone on this computer can have their own profile: settings, controls, hotbar, loadouts, stats and look are kept separately.';
+    renderProfile(body);
   } else if (UI.tab === 'settings') {
     $('menutitle').textContent = 'Settings';
     $('menusub').textContent = 'Saved automatically in this browser.';
@@ -301,11 +443,11 @@ export function renderMenu() {
     body.innerHTML += `
       <h3>Fling Line (always with you)</h3>
       <div class="help">
-        <div>${k('grab')} grab something / drop it</div>
-        <div>${k('use')} while holding: THROW it</div>
+        <div>${k('grab')} grab something · again: THROW it</div>
+        <div>${k('use')} while holding: drop it</div>
         <div>${k('reelIn')} / ${k('reelOut')} pull closer / push away</div>
         <div>hold ${k('rotate')} + move mouse: turn what you hold</div>
-        <div>Grab the ground or a wall: grappling hook — swing, reel in, ${k('use')} to zip</div>
+        <div>Grappling Hook tool: click the ground / walls to hook on — swing, reel in, ${k('grab')} to zip, click to let go</div>
         <div>Anything can be lifted. Heavy things just move slower.</div>
       </div>
       <h3>Moving</h3>
@@ -332,7 +474,7 @@ export function renderMenu() {
         <div>${k('mute')} mute · ${k('quality')} low / high graphics</div>
         <div>${k('sensDown')} / ${k('sensUp')} mouse sensitivity</div>
         <div>${k('photo')} hide the HUD (photo mode)</div>
-        <div><kbd>ESC</kbd> free the mouse (pauses the game)</div>
+        <div><kbd>ESC</kbd> pause (frees the mouse) · ${k('menu')} menu · ${k('lockMouse')} lock / unlock the mouse</div>
         <div>The game pauses completely whenever the menu is open.</div>
       </div>`;
   }
@@ -371,6 +513,8 @@ export function updateHud(dt) {
     `<div class="dim">${G.map ? G.map.name.toUpperCase() : ''} · ${G.ents.size} OBJECTS · ${fps} FPS${G.timeScale < 1 ? ' · SLOW-MO' : ''}${G.player && G.player.flying ? ' · FLYING' : ''}</div>`;
   $('crosshair').className = G.crossHint || '';
   $('toolnote').textContent = G.lineNote || G.toolNote || '';
+  const mb = $('helpbtn');
+  if (mb) { const t = bindText('menu', 1); if (mb.dataset.k !== t) { mb.dataset.k = t; mb.innerHTML = `<kbd>${esc(t)}</kbd>MENU`; } }
   const gk = $('grabkey');
-  if (gk) { const t = `${bindText('grab', 1)}`; if (gk.dataset.k !== t + !!G.grab) { gk.dataset.k = t + !!G.grab; gk.innerHTML = `<kbd>${esc(t)}</kbd>${G.grab ? 'DROP' : 'FLING LINE'}`; } }
+  if (gk) { const t = `${bindText('grab', 1)}`; if (gk.dataset.k !== t + !!G.grab) { gk.dataset.k = t + !!G.grab; gk.innerHTML = `<kbd>${esc(t)}</kbd>${G.grab ? (G.grab.hook ? 'ZIP' : 'THROW') : 'FLING LINE'}`; } }
 }

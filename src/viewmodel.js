@@ -323,6 +323,15 @@ const MODELS = {
     g.userData.kick = 0.2;
     return g;
   },
+  grapple() {
+    const g = rayGun(0x4a525c, 0xd0d6dc, { glow: 0xffffff });
+    // the claw sticking out of the muzzle
+    const steel = mat(0xd0d6dc, { r: 0.3, m: 0.85 });
+    for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; const c = bx(g, 0.012, 0.012, 0.06, steel, Math.cos(a) * 0.022, 0.035 + Math.sin(a) * 0.022, -0.34); c.rotation.set(Math.sin(a) * 0.5, -Math.cos(a) * 0.5, 0); }
+    cz(g, 0.012, 0.012, 0.05, steel, 0, 0.035, -0.31, 6);
+    g.userData.kick = 0.6;
+    return g;
+  },
   freeze: () => rayGun(0x9fe8ff, 0x3f8fbf, { dish: true, glow: 0x7fe8ff, tank: 0xbff4ff }),
   antigrav: () => rayGun(0x5a189a, 0xc77dff, { glow: 0xe0aaff }),
   grow: () => rayGun(0x2d6a4f, 0x7cff5a, { dish: true, glow: 0x7cff5a }),

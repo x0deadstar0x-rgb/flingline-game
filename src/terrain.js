@@ -8,7 +8,9 @@ import * as CANNON from 'cannon-es';
 import { G, GROUP, clamp } from './core.js';
 
 export const V = 0.5;   // block size (m)
-const CH = 32;          // chunk size in columns (16 m)
+const CH = 32;          // chunk size in columns (16 m) for drawing
+const PC = 16;          // chunk size in columns (8 m) for physics
+const RMAX = 56;        // physics chunks with more flat pieces than this use a height grid instead
 
 let T = null;
 const _c = new THREE.Color(), _c2 = new THREE.Color();
@@ -32,30 +34,17 @@ export function createTerrain(opts, group, bodies) {
     topc[k] = color(l * V, x, z);
   }
   const bed = Math.floor(bedrock / V);
-  // physics
-  const data = [];
-  let minH = 1e9, maxH = -1e9;
-  for (let i = 0; i < N; i++) {
-    const col = new Array(N);
-    for (let j = 0; j < N; j++) { const h = lv[i * N + j] * V; col[j] = h; if (h < minH) minH = h; if (h > maxH) maxH = h; }
-    data.push(col);
-  }
-  const shape = new CANNON.Heightfield(data, { elementSize: V, minValue: Math.min(minH, bed * V) - 1, maxValue: maxH + 0.5 });
-  const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
-  body.addShape(shape);
-  body.position.set(x0 + V / 2, 0, z0 - V / 2);
-  body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  body.isTerrain = true;
-  G.world.addBody(body); bodies.push(body);
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
   const nc = Math.ceil(N / CH);
   T = {
-    W, N, x0, z0, lv, orig, topc, burn, bed, shape, body, mat, nc, group,
+    W, N, x0, z0, lv, orig, topc, burn, bed, mat, nc, group, bodies,
+    pnc: Math.ceil(N / PC), pchunks: [],
     chunks: new Array(nc * nc).fill(null), dirty: new Set(),
     soil: opts.soil ?? 0x6b4f35, rock: opts.rock ?? 0x7d7f86, soilDepth: opts.soilDepth ?? 6,
     under: opts.under || null,
   };
   for (let ci = 0; ci < nc; ci++) for (let cj = 0; cj < nc; cj++) buildChunk(ci, cj);
+  for (let ci = 0; ci < T.pnc; ci++) for (let cj = 0; cj < T.pnc; cj++) buildPhysics(ci, cj);
   G.groundAt = terrainHeight;
   G.terrain = T;
   return T;
@@ -130,6 +119,12 @@ export function terrainHeight(x, z) {
   if (i < 0 || j < 0 || i >= T.N || j >= T.N) return -1e9;
   return T.lv[i * T.N + j] * V;
 }
+// is this point inside the ground? (below the top of its block column, within the map)
+export function belowGround(x, y, z, margin = 0.3) {
+  const h = terrainHeight(x, z);
+  return h > -1e8 && y < h - margin && h > T.bed * V + 1;
+}
+
 export function terrainTopColor(x, z) {
   if (!T) return 0x6b4f35;
   const i = clamp(Math.floor((x - T.x0) / V), 0, T.N - 1), j = clamp(Math.floor((T.z0 - z) / V), 0, T.N - 1);
@@ -295,6 +290,113 @@ export function updateTerrain() {
   }
 }
 
+// ------------------------------------------------------------- physics
+// Each 8 m patch of ground is one static body. Usually it's made of a few boxes (equal-height
+// areas merged together): cheap, and exactly the shape of the blocks. Very bumpy patches use a
+// small height grid instead (fewer pieces to keep in memory).
+function buildPhysics(ci, cj) {
+  const { N, lv, x0, z0, bed } = T;
+  const idx = ci * T.pnc + cj;
+  const old = T.pchunks[idx];
+  if (old) { G.world.removeBody(old); const k = T.bodies.indexOf(old); if (k >= 0) T.bodies.splice(k, 1); }
+  const i0 = ci * PC, j0 = cj * PC, i1 = Math.min(N, i0 + PC), j1 = Math.min(N, j0 + PC);
+  const w = i1 - i0, h = j1 - j0;
+  const at = (i, j) => (i < 0 || j < 0 || i >= N || j >= N ? bed - 1 : lv[i * N + j]);
+  // merge equal-height columns into rectangles
+  const done = new Uint8Array(w * h), rects = [];
+  for (let b = 0; b < h; b++) for (let a = 0; a < w; a++) {
+    if (done[a * h + b]) continue;
+    const L = lv[(i0 + a) * N + j0 + b];
+    let a2 = a + 1;
+    while (a2 < w && !done[a2 * h + b] && lv[(i0 + a2) * N + j0 + b] === L) a2++;
+    let b2 = b + 1;
+    outer: while (b2 < h) { for (let x = a; x < a2; x++) if (done[x * h + b2] || lv[(i0 + x) * N + j0 + b2] !== L) break outer; b2++; }
+    for (let x = a; x < a2; x++) for (let y = b; y < b2; y++) done[x * h + y] = 1;
+    rects.push([a, b, a2, b2, L]);
+  }
+  const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
+  body.isTerrain = true;
+  if (rects.length <= RMAX) {
+    body.position.set(x0 + i0 * V, 0, z0 - j0 * V);
+    for (const [a, b, a2, b2, L] of rects) {
+      // how far down the box has to go: to the lowest neighbour (so its sides are walls), at least 1 m
+      let lowest = L;
+      for (let x = a - 1; x <= a2; x++) { lowest = Math.min(lowest, at(i0 + x, j0 + b - 1), at(i0 + x, j0 + b2)); }
+      for (let y = b; y < b2; y++) { lowest = Math.min(lowest, at(i0 + a - 1, j0 + y), at(i0 + a2, j0 + y)); }
+      const top = L * V;
+      // thick enough (3 m+) that nothing falling fast can slip through between physics steps
+      const bottom = Math.max((bed - 1) * V, Math.min(top - 3, lowest * V - 0.25));
+      const hx = (a2 - a) * V / 2, hz = (b2 - b) * V / 2, hy = (top - bottom) / 2;
+      body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)), new CANNON.Vec3(a * V + hx, bottom + hy, -(b * V + hz)));
+    }
+  } else {
+    // bumpy patch: height grid through the column centres (one extra row/column to join the next patch)
+    const data = [];
+    let mn = 1e9, mx = -1e9;
+    for (let a = 0; a <= w; a++) {
+      const col = [];
+      for (let b = 0; b <= h; b++) { const v = at(Math.min(N - 1, i0 + a), Math.min(N - 1, j0 + b)) * V; col.push(v); if (v < mn) mn = v; if (v > mx) mx = v; }
+      data.push(col);
+    }
+    body.addShape(new CANNON.Heightfield(data, { elementSize: V, minValue: mn - 1, maxValue: mx + 0.5 }));
+    body.position.set(x0 + (i0 + 0.5) * V, 0, z0 - (j0 + 0.5) * V);
+    body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  }
+  G.world.addBody(body);
+  T.bodies.push(body);
+  T.pchunks[idx] = body;
+  // things resting here may have lost their footing
+  if (old) {
+    const xa = x0 + i0 * V - 1, xb = x0 + i1 * V + 1, za = z0 - j1 * V - 1, zb = z0 - j0 * V + 1;
+    for (const bd of G.world.bodies) if (bd.type === CANNON.Body.DYNAMIC && bd.sleepState === CANNON.Body.SLEEPING && bd.position.x > xa && bd.position.x < xb && bd.position.z > za && bd.position.z < zb) bd.wakeUp();
+  }
+}
+
+// The general pair search ("broadphase") skips the ground patches: each moving thing looks up
+// the patches under it directly by position, which costs nothing however big the map is.
+function chunksIn(aabb, cb) {
+  if (!T || !T.pchunks.length) return;
+  const s = PC * V;
+  const ia = Math.max(0, Math.floor((aabb.lowerBound.x - T.x0) / s)), ib = Math.min(T.pnc - 1, Math.floor((aabb.upperBound.x - T.x0) / s));
+  const ja = Math.max(0, Math.floor((T.z0 - aabb.upperBound.z) / s)), jb = Math.min(T.pnc - 1, Math.floor((T.z0 - aabb.lowerBound.z) / s));
+  for (let ci = ia; ci <= ib; ci++) for (let cj = ja; cj <= jb; cj++) {
+    const c = T.pchunks[ci * T.pnc + cj];
+    if (!c) continue;
+    if (c.aabbNeedsUpdate) c.updateAABB();
+    if (c.aabb.overlaps(aabb)) cb(c);
+  }
+}
+export class VoxelBroadphase extends CANNON.SAPBroadphase {
+  constructor(world) {
+    super();
+    const list = this.axisList;
+    this._addBodyHandler = (e) => { if (!e.body.isTerrain) list.push(e.body); };
+    if (world) this.setWorld(world);
+  }
+  setWorld(world) {
+    super.setWorld(world);
+    for (let i = this.axisList.length - 1; i >= 0; i--) if (this.axisList[i].isTerrain) this.axisList.splice(i, 1);
+  }
+  collisionPairs(world, p1, p2) {
+    super.collisionPairs(world, p1, p2);
+    if (!T) return;
+    const DYN = CANNON.Body.DYNAMIC, SLEEP = CANNON.Body.SLEEPING;
+    for (const b of this.axisList) {
+      if (b.type !== DYN || b.sleepState === SLEEP) continue;
+      if (b.aabbNeedsUpdate) b.updateAABB();
+      chunksIn(b.aabb, (c) => {
+        if ((b.collisionFilterGroup & c.collisionFilterMask) === 0 || (c.collisionFilterGroup & b.collisionFilterMask) === 0) return;
+        p1.push(b); p2.push(c);
+      });
+    }
+  }
+  aabbQuery(world, aabb, result = []) {
+    super.aabbQuery(world, aabb, result);
+    chunksIn(aabb, (c) => result.push(c));
+    return result;
+  }
+}
+
 // ------------------------------------------------------------- carving
 // Carve a crater around pos (sphere of radius R, ragged edge). Returns the removed blocks'
 // colours (a sample) and count, or null if the blast was in the air.
@@ -317,7 +419,7 @@ export function carveTerrain(pos, R, opts = {}) {
     if (d > Rc * 1.25) continue;
     if (d > Rc) {
       // a ring of thrown-up dirt around big craters
-      if (opts.rim && lv[k] <= T.orig[k] && hash(i * 3 + 1, j * 5 + 2) < 0.55) { lv[k] += 1; T.shape.setHeightValueAtIndex(i, j, lv[k] * V); if (lv[k] * V > T.shape.maxValue) T.shape.maxValue = lv[k] * V; }
+      if (opts.rim && lv[k] <= T.orig[k] && hash(i * 3 + 1, j * 5 + 2) < 0.55) lv[k] += 1;
       if (!burn[k]) burn[k] = 1;
       markDirty(i, j);
       continue;
@@ -331,15 +433,15 @@ export function carveTerrain(pos, R, opts = {}) {
       if (sample.length < 80) for (let q = l; q > nl && sample.length < 80; q--) sample.push(blockColor(k, q));
       lv[k] = nl;
       if (nl < minL) minL = nl;
-      T.shape.setHeightValueAtIndex(i, j, nl * V);
     }
     markDirty(i, j);
   }
+  // the ground's physics follows the new blocks immediately
+  const pa = Math.max(0, Math.floor((ia - 1) / PC)), pb = Math.min(T.pnc - 1, Math.floor((ib + 1) / PC));
+  const qa = Math.max(0, Math.floor((ja - 1) / PC)), qb = Math.min(T.pnc - 1, Math.floor((jb + 1) / PC));
+  for (let ci = pa; ci <= pb; ci++) for (let cj = qa; cj <= qb; cj++) buildPhysics(ci, cj);
   if (minL < Infinity) {
     flood(Math.max(0, ia - 1), Math.min(N - 1, ib + 1), Math.max(0, ja - 1), Math.min(N - 1, jb + 1));
-    T.shape.minValue = Math.min(T.shape.minValue, minL * V - 0.5);
-    T.shape.updateBoundingSphereRadius();
-    T.body.aabbNeedsUpdate = true;
   }
   return { removed, sample, ground: g };
 }

@@ -12,6 +12,7 @@ import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
 import { TOOL, updateProjectiles, updateBlackHoles } from './tools/index.js';
 import { initViewmodel, renderViewmodel } from './viewmodel.js';
+import { VoxelBroadphase } from './terrain.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
 
 // expose a few helpers so modules can call each other without import cycles
@@ -53,7 +54,7 @@ G.sun = sun;
 
 // ---------------------------------------------------------------- physics
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
-world.broadphase = new CANNON.SAPBroadphase(world);
+world.broadphase = new VoxelBroadphase(world);
 world.allowSleep = true;
 world.solver.iterations = 10;
 world.defaultContactMaterial.friction = 0.5;
@@ -68,20 +69,36 @@ initFx(scene);
 initViewmodel(renderer);
 loadMap('island');
 G.player = new Player();
+G.onLookChange = (l) => G.player.applyLook(l);
 G.player.respawn();
 
 // ---------------------------------------------------------------- input
 // Keys / buttons go through input.js, which maps them to actions (rebindable).
 let playing = false;
-let lockFailed = false;
+// Mouse capture ("pointer lock"). If the browser refuses once (it does when you re-lock too
+// quickly after Esc), the next click simply tries again; only after repeated refusals (or no
+// support at all) does the game fall back to looking around with the free cursor.
+let lockFails = 0;
+const lockUnsupported = !canvas.requestPointerLock;
+const lockFailed = () => lockUnsupported || lockFails >= 3;
+// the browser refuses a re-lock for about a second after Esc: try once more after that
+let lockRetry = 0;
+function onLockFail() {
+  lockFails++;
+  updatePausedOverlay();
+  if (playing && !UI.menuOpen && performance.now() - lockRetry > 3000) {
+    lockRetry = performance.now();
+    setTimeout(() => { if (playing && !UI.menuOpen && !isLocked()) requestLock(); }, 1150);
+  }
+}
 const isLocked = () => document.pointerLockElement === canvas;
 
 function requestLock() {
-  if (lockFailed) return;
+  if (lockUnsupported || isLocked()) return;
   try {
-    const p = canvas.requestPointerLock && canvas.requestPointerLock();
-    if (p && p.catch) p.catch(() => { lockFailed = true; });
-  } catch (e) { lockFailed = true; }
+    const p = canvas.requestPointerLock();
+    if (p && p.catch) p.catch(onLockFail);
+  } catch (e) { onLockFail(); }
 }
 G.requestLock = requestLock;
 
@@ -93,19 +110,20 @@ function start() {
 }
 document.getElementById('start').addEventListener('click', start);
 document.addEventListener('pointerlockchange', () => {
-  if (!isLocked()) clearInput();
+  if (!isLocked()) clearInput(); else lockFails = 0;
   updatePausedOverlay();
 });
-document.addEventListener('pointerlockerror', () => { lockFailed = true; updatePausedOverlay(); });
-document.getElementById('paused').addEventListener('click', () => { requestLock(); });
+document.addEventListener('pointerlockerror', onLockFail);
+document.getElementById('paused').addEventListener('click', () => { escPaused = false; requestLock(); updatePausedOverlay(); });
+let escPaused = false; // paused with Esc where the mouse can't be captured
 function updatePausedOverlay() {
-  document.getElementById('paused').classList.toggle('show', playing && !isLocked() && !UI.menuOpen && !lockFailed);
+  document.getElementById('paused').classList.toggle('show', playing && !UI.menuOpen && ((!isLocked() && !lockFailed()) || escPaused));
 }
 G.updatePausedOverlay = updatePausedOverlay;
 
 canvas.addEventListener('mousedown', (e) => {
   if (!playing) return;
-  if (!isLocked() && !lockFailed) { if (e.button === 0) requestLock(); return; }
+  if (!isLocked() && !lockFailed()) { if (e.button === 0) requestLock(); return; }
   initAudio();
   press('Mouse' + e.button);
   e.preventDefault();
@@ -114,10 +132,10 @@ window.addEventListener('mouseup', (e) => release('Mouse' + e.button));
 // rebinding a mouse button from the menu
 window.addEventListener('mousedown', (e) => { if (capturing() && e.target !== canvas) { e.preventDefault(); e.stopPropagation(); press('Mouse' + e.button); } }, true);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-canvas.addEventListener('wheel', (e) => { if (playing && (isLocked() || lockFailed)) { e.preventDefault(); addWheel(e.deltaY); } }, { passive: false });
+canvas.addEventListener('wheel', (e) => { if (playing && (isLocked() || lockFailed())) { e.preventDefault(); addWheel(e.deltaY); } }, { passive: false });
 document.addEventListener('mousemove', (e) => {
   if (!playing || UI.menuOpen) return;
-  if (isLocked() || lockFailed) {
+  if (isLocked() || lockFailed()) {
     // clamp spikes (some browsers report a huge jump right after locking)
     const mx = Math.max(-200, Math.min(200, e.movementX)), my = Math.max(-200, Math.min(200, e.movementY));
     const sens = S.sens / 1000;
@@ -137,7 +155,8 @@ window.addEventListener('keydown', (e) => {
   if (PREVENT.has(e.code)) e.preventDefault();
   if (e.repeat) return;
   if (!playing) { if (e.code === 'Enter' || e.code === 'Space') start(); return; }
-  if (e.code === 'Escape' && UI.menuOpen) { closeMenu(); return; }
+  // Esc: closes the menu; otherwise pauses (frees the mouse) — also where the mouse can't be captured
+  if (e.code === 'Escape') { if (UI.menuOpen) closeMenu(); else if (lockFailed()) { escPaused = true; updatePausedOverlay(); } return; }
   initAudio();
   press(e.code);
 });
@@ -160,7 +179,7 @@ function isPaused() {
   if (document.hidden) return true;
   if (G.net && G.net.active) return false;
   if (!playing) return true;
-  return UI.menuOpen || (!isLocked() && !lockFailed);
+  return UI.menuOpen || escPaused || (!isLocked() && !lockFailed());
 }
 
 // settings → engine
@@ -198,6 +217,10 @@ let wasPaused = false;
 
 // keys that work any time (also while paused / in the menu)
 function globalActions() {
+  if (input.tap('lockMouse') && playing && !UI.menuOpen) {
+    if (isLocked()) document.exitPointerLock();
+    else { escPaused = false; lockFails = 0; requestLock(); updatePausedOverlay(); }
+  }
   if (input.tap('menu')) { if (UI.menuOpen) closeMenu(); else openMenu(); }
   if (input.tap('help') && !UI.menuOpen) openMenu('help');
   if (input.tap('mute')) toast(toggleMute() ? 'Muted' : 'Sound on');
@@ -226,14 +249,18 @@ function gameActions(dt) {
     else if (ctl.wheel === 'smart') selectSlot((UI.slot + (w > 0 ? 1 : -1) + 10) % 10);
   }
   const tool = currentTool();
-  // the Fling Line is always with you: grab key grabs / drops (or cancels a half-made rope / weld)
+  // the Fling Line is always with you.
+  //  grab key (F / right click): grab something loose; while holding: THROW it (hooked: zip)
+  //  click: drop what you hold (hooked: let go), otherwise use your tool
+  //  the grappling hook is a tool: with it, click hooks the ground / walls
+  const held = G.grab;
   if (input.tap('grab')) {
-    if (!G.grab && tool.cancel && tool.cancel()) { /* cancelled */ }
-    else line.toggle();
+    if (held) { line.throwIt(); useLock = true; }
+    else if (tool.cancel && tool.cancel()) { /* cancelled a half-made rope / weld */ }
+    else line.grab();
   }
-  // click: throw what you hold (or zip to the hook), otherwise use the tool
   if (input.tap('use')) {
-    if (G.grab) { line.throwIt(); useLock = true; G.recoil(0.6, false); }
+    if (held) { line.release(true); useLock = true; }
     else {
       useLock = false;
       // recoil only when the tool really fired (its cooldown started)
@@ -250,6 +277,27 @@ function gameActions(dt) {
   if (input.held('use') && !useLock && !G.grab && tool.held) { const cd0 = tool.cd || 0; tool.held(dt); if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1); }
 }
 let useLock = false; // after a throw, holding the button doesn't also fire the tool
+
+// Awake budget: when lots of things are moving at once, the slowest ones are put to sleep
+// (anything that gets hit wakes up again). Keeps big messes from grinding the game down.
+let physLoad = 0, budgetTick = 0;
+const AWAKE_MAX = 180;
+function sleepBudget() {
+  const awake = [];
+  for (const b of world.bodies) {
+    if (b.type !== CANNON.Body.DYNAMIC || b.sleepState === CANNON.Body.SLEEPING || !b.allowSleep) continue;
+    if (b.ent && (b.ent.kind === 'ragpart' || b.ent.thrusters.length || b.ent.antigrav > 0 || b.ent.carriedBy)) continue;
+    if (G.grab && G.grab.body === b) continue;
+    awake.push(b);
+  }
+  const limit = physLoad > 10 ? AWAKE_MAX * 0.6 : AWAKE_MAX;
+  if (awake.length <= limit) return;
+  // slowest first; never put fast-flying things to sleep
+  for (const b of awake) b._sp = b.velocity.lengthSquared() + b.angularVelocity.lengthSquared() * 0.2;
+  awake.sort((a, b) => a._sp - b._sp);
+  const n = awake.length - limit;
+  for (let i = 0; i < n; i++) { if (awake[i]._sp > 9) break; awake[i].sleep(); }
+}
 
 function frame() {
   requestAnimationFrame(frame);
@@ -285,8 +333,14 @@ function frame() {
 
   if (active) gameActions(dt);
 
-  // physics
-  world.step(1 / 60, dt, 4);
+  // physics. Lag guard: under heavy load it takes bigger (fewer) steps, so the world keeps real
+  // speed instead of turning into slow motion or piling up work
+  const tStep = performance.now();
+  const heavy = physLoad > 12;
+  world.step(heavy ? 1 / 40 : 1 / 60, dt, heavy ? 2 : 3);
+  physLoad = physLoad * 0.9 + (performance.now() - tStep) * 0.1;
+  world.solver.iterations = physLoad > 10 ? 6 : 10;
+  if (++budgetTick % 10 === 0) sleepBudget();
   const q = G.queue.splice(0);
   for (const fn of q) fn();
   for (let i = G.timers.length - 1; i >= 0; i--) {
@@ -321,4 +375,5 @@ function frame() {
 }
 frame();
 window.__G = G; // handy for debugging in the console
+window.__CANNON = CANNON;
 window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input, isPaused };

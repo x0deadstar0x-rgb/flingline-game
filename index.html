@@ -192,6 +192,21 @@
   .chip b { color: var(--txt); margin-right: 6px; }
   .chip:hover, .chip.on { background: #fff; color: #000; } .chip:hover b, .chip.on b { color: #000; }
   body.light .chip:hover, body.light .chip.on { background: #111; color: #fff; } body.light .chip:hover b, body.light .chip.on b { color: #fff; }
+  .loadouts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 16px 0 4px; }
+  .loadouts .lt { font: 700 11px var(--mono); letter-spacing: 3px; color: var(--dim); margin-right: 6px; }
+  .chip .x { margin-left: 8px; opacity: 0.6; } .chip .x:hover { opacity: 1; }
+  .lname, .pname { background: transparent; border: 1px solid var(--line2); color: var(--txt); padding: 8px 10px; font: 600 13px var(--mono); outline: none; }
+  .pname { font: 800 20px var(--font); width: 100%; max-width: 360px; } .pname.small { font: 600 13px var(--mono); max-width: 260px; }
+  .ptop { display: flex; gap: 22px; align-items: center; padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .avatar { width: 120px; height: 120px; border: 1px solid var(--line2); display: flex; align-items: center; justify-content: center; flex: none; }
+  .avatar img { width: 110px; height: 110px; object-fit: contain; }
+  .pinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  .pstats { display: flex; gap: 16px; flex-wrap: wrap; font: 700 11px var(--mono); letter-spacing: 1px; color: var(--dim); }
+  .pstats b { color: var(--txt); margin-left: 4px; }
+  .sw { display: flex; flex-wrap: wrap; gap: 6px; max-width: 420px; }
+  .swatch { width: 26px; height: 26px; border: 2px solid transparent; cursor: pointer; padding: 0; outline: 1px solid var(--line2); }
+  .swatch.on { border-color: var(--txt); outline-color: var(--txt); }
+  .badge2 { font: 700 10px var(--mono); border: 1px solid currentColor; padding: 1px 5px; margin-left: 8px; }
   /* ---------- controls screen */
   .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
   .preset { background: var(--panel); border: 0; text-align: left; padding: 14px 16px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
@@ -217,7 +232,7 @@
 
 <div id="hud">
   <div id="stats"></div>
-  <div id="helpbtn"><kbd>TAB</kbd>MENU</div>
+  <div id="helpbtn"><kbd>E</kbd>MENU</div>
   <div id="crosshair"></div>
   <div id="toolinfo"><div id="toolname"></div><div id="toolhint"></div><div id="toolnote"></div></div>
   <div id="hotbar"></div>
@@ -235,12 +250,13 @@
       <button data-tab="tools">Tools</button>
       <button data-tab="items">Spawn</button>
       <button data-tab="maps">Maps</button>
+      <button data-tab="profile">Profile</button>
       <button data-tab="settings">Settings</button>
       <button data-tab="controls">Controls</button>
       <button data-tab="help">Help</button>
       <div class="spacer"></div>
       <button id="menuclose">Play</button>
-      <div class="tip">TAB / ESC TO CLOSE</div>
+      <div class="tip">E / ESC TO CLOSE</div>
     </nav>
     <section id="menumain">
       <div id="menuhead">
@@ -300,11 +316,11 @@
     <button class="go">CLICK TO PLAY</button>
     <div class="keys">
       <div><kbd>WASD</kbd> move</div>
-      <div><kbd>F</kbd> grab / drop</div>
-      <div><kbd>CLICK</kbd> throw / use tool</div>
+      <div><kbd>F</kbd> grab · again: throw</div>
+      <div><kbd>CLICK</kbd> drop / use tool</div>
       <div><kbd>Z X</kbd> line length</div>
       <div><kbd>1-0</kbd> tools</div>
-      <div><kbd>TAB</kbd> menu · controls</div>
+      <div><kbd>E</kbd> menu · controls</div>
     </div>
   </div>
 </div>
