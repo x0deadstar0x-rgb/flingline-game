@@ -99,11 +99,37 @@ export class Player {
 
   setTool(id) { equipViewmodel(id); }
 
+  // in a vehicle: the camera orbits it (mouse), and your tools fire from it
+  updateDriving(dt) {
+    const cb = G.vehicle.body;
+    const cp = Math.cos(this.pitch);
+    this.fwd.set(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
+    const ip = cb.interpolatedPosition;
+    const pivot = new THREE.Vector3(ip.x, ip.y + 1.8, ip.z);
+    let cam = pivot.clone().addScaledVector(this.fwd, -(this.camDistDrive || 8)).add(new THREE.Vector3(0, 0.6, 0));
+    const block = raycast(pivot, cam, GROUP.STATIC);
+    if (block) cam = pivot.clone().lerp(block.point, Math.max(0, (block.dist - 0.4) / pivot.distanceTo(cam)));
+    if (G.shake > 0) { cam.add(new THREE.Vector3((Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4)); G.shake = Math.max(0, G.shake - dt * 2.5); }
+    G.camera.position.copy(cam);
+    G.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
+    const sp = cb.velocity.length();
+    const targetFov = (G.settings ? G.settings.fov : 72) + Math.min(14, sp * 0.35);
+    G.camera.fov += (targetFov - G.camera.fov) * Math.min(1, 4 * dt);
+    G.camera.updateProjectionMatrix();
+    this.camPos.copy(cam);
+    G.aim.origin.copy(cam);
+    G.aim.dir.copy(this.fwd);
+    G.aim.start = pivot.clone().addScaledVector(this.fwd, 2.2);
+    G.aim.hand.copy(G.aim.start);
+    for (const kk in this.meshes) this.meshes[kk].visible = false;
+  }
+
   update(dt, input) {
     const b = this.body;
     // look
     this.yaw -= input.lookX;
     this.pitch = clamp(this.pitch - input.lookY, -1.5, 1.45);
+    if (G.vehicle) { this.updateDriving(dt); return; }
     const fwdFlat = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const p = b.position;

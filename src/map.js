@@ -304,6 +304,8 @@ function buildFlat() {
   srand(11);
   makeTerrain({ W: 300, es: 3, height: () => 0, color: (h, x, z) => ((Math.floor(x / 15) + Math.floor(z / 15)) & 1 ? 0x63b34d : 0x5aa646), bedrock: -6 });
   zones = [[0, 34, 8]];
+  // things to drive (V to get in)
+  sleepy(() => { put('kart', -6, 0.3, 26); put('kart', -3, 0.3, 26); put('truck', 8, 0.6, 24); put('car', 14, 0.3, 24); });
   for (let i = 0; i < 4; i++) sbox(5, 0.5, 12, 30 + i * 9, 1.6 + i * 0.6, 10, [0x3a86ff, 0xff006e, 0xffbe0b, 0x8338ec][i], null, [0.22 + i * 0.1, 0, 0]);
   sbox(20, 0.5, 6, 45, 1.5, -20, 0x9aa4ae, 'metal', [0, 0, 0], 2);
   sbox(20, 0.5, 6, 45, 3, -24.5, 0x9aa4ae, 'metal', [0.7, 0, 0], 2);
@@ -635,6 +637,8 @@ function buildWorld() {
     for (let i = 0; i < 6; i++) put('lamp', -15 + i * 6, gh(-15 + i * 6, 40) , 34);
     for (const [x, z] of [[-6, 46], [6, 46]]) put('bench', x, gh(x, z), z);
     for (const [x, z] of [[-30, 30], [28, 44], [0, 70]]) put('car', x, gh(x, z) + 0.2, z);
+    put('truck', 12, gh(12, 30) + 0.6, 30); put('kart', -12, gh(-12, 52) + 0.3, 52); put('kart', -9, gh(-9, 52) + 0.3, 52);
+    put('truck', 205, gh(205, 20) + 0.6, 20);
     pallets(-8, gh(-8, 10) + 0.1, 10, 3);
     put('tnt_mega', 40, gh(40, 10) + 0.3, 10);
     // the beach and its pier

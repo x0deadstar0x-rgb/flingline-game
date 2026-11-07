@@ -9,6 +9,7 @@ import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import { initNuke, updateNukes } from './nuke.js';
 import { updateBuildings } from './buildings.js';
+import { toggleVehicle, updateVehicle } from './vehicles.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
@@ -266,6 +267,7 @@ function gameActions(dt) {
   if (input.tap('prevTool')) cycleTool(-1);
   if (input.tap('nextTool')) cycleTool(1);
   if (input.tap('fly')) { G.player.flying = !G.player.flying; toast(G.player.flying ? `Fly mode ON (${bindText('jump', 1)} up, ${bindText('sprint', 1)} down)` : 'Fly mode OFF'); }
+  if (input.tap('interact') && !toggleVehicle()) toast('Nothing to get into here (walk up to a car)');
   if (input.tap('slowmo')) { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); }
   if (input.tap('clear')) { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
   if (input.tap('resetMap')) { loadMap(G.mapId); toast('Map reset'); }
@@ -393,6 +395,7 @@ function frame() {
     if (G.timers[i].t <= G.time) { const t = G.timers[i]; G.timers.splice(i, 1); t.fn(); }
   }
 
+  if (G.vehicle) updateVehicle(dt, pin);
   G.player.update(rdt, pin);
   Items.updateEnts(dt);
   Items.updateFirePatches(dt);
@@ -427,7 +430,7 @@ function frame() {
 
   endFrame();
   renderer.render(scene, camera);
-  renderViewmodel(renderer);
+  if (!G.vehicle) renderViewmodel(renderer);
   needRender = false;
 }
 frame();

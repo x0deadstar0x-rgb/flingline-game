@@ -247,6 +247,20 @@ export const CATALOG = [
     { t: 'cyl', r: 0.38, h: 0.3, off: [-1.1, -0.35, 0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.38, h: 0.3, off: [1.1, -0.35, -0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.38, h: 0.3, off: [-1.1, -0.35, -0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('truck', 'Monster Truck', '🛻', 'Stuff', { shape: 'compound', mat: 'car', massMul: 1.2, parts: [
+    { t: 'box', size: [4.4, 1.0, 2.3], off: [0, 0.35, 0], color: 0xd62828 },
+    { t: 'box', size: [1.9, 0.9, 2.1], off: [-0.55, 1.3, 0], tex: 'window' },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [1.45, -0.35, 1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [-1.45, -0.35, 1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [1.45, -0.35, -1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [-1.45, -0.35, -1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('kart', 'Go-Kart', '🏎️', 'Stuff', { shape: 'compound', mat: 'car', massMul: 0.6, parts: [
+    { t: 'box', size: [2.0, 0.3, 1.2], off: [0, 0, 0], color: 0x2a9d8f },
+    { t: 'box', size: [0.5, 0.5, 0.6], off: [-0.45, 0.35, 0], color: 0x264653 },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [0.75, -0.12, 0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, 0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
   B('vending', 'Vending Machine', '🥤', 'Stuff', { shape: 'compound', mat: 'appliance', parts: [
     { t: 'box', size: [1.1, 2.0, 0.9], off: [0, 0, 0], color: 0xd2232a },
     { t: 'box', size: [0.7, 1.2, 0.05], off: [-0.12, 0.25, 0.46], tex: 'window' }] }),
