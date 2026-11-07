@@ -239,19 +239,18 @@ export function updateGrabFx(dt) {
   }
 }
 
-export const grabTools = [{
-  id: 'fling', name: 'Fling Line', icon: '✋', color: 0xffffff,
-  get hint() { return `Click: grab / drop (ground & walls: grappling hook) · ${bindText('alt', 1)}: THROW (or zip to hook) · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: line shorter/longer · hold ${bindText('rotate', 1)} + mouse: rotate`; },
-  desc: 'Grab anything loose and it stays at the distance you grabbed it from, without spinning. Heavy things are slower but nothing is too heavy. Hook the ground or a wall to swing like a grappling hook.',
-  down() { if (G.grab) release(); else tryGrab(); },
-  alt() { throwIt(); },
-  unequip() { release(false); },
-  update(dt, input) {
+// The Fling Line is not a hotbar tool: you always have it (grab key, default F / right click).
+// update() runs every frame whatever tool you hold.
+export const line = {
+  holding: () => !!G.grab,
+  toggle() { if (G.grab) release(); else tryGrab(); },
+  throwIt() { throwIt(); },
+  release(sound = false) { release(sound); },
+  update(dt, input, showHint) {
     if (!strand) strand = new Strand(0xffffff, 0.022, 16, true);
     const g = G.grab;
-    G.crossHint = null;
-    G.toolNote = null;
     if (g) {
+      G.crossHint = null;
       if (input.held('reelIn')) reelBy(-dt * REEL_SPEED);
       if (input.held('reelOut')) reelBy(dt * REEL_SPEED);
       const hand = G.aim.hand;
@@ -261,10 +260,10 @@ export const grabTools = [{
         strand.setColor(tmpC.copy(cLoose).lerp(cTight, clamp(g.tension, 0, 1) * 0.6));
         const d = ap.distanceTo(hand);
         strand.update(hand, ap, Math.max(0, (g.dist - d) * 0.3), null);
-        G.toolNote = `Hooked · ${g.dist.toFixed(1)} m line · ${bindText('alt', 1)} to zip`;
+        G.lineNote = `Hooked · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: zip · ${bindText('grab', 1)}: let go · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: reel`;
         return;
       }
-      if (input.held('rotate')) G.toolNote = 'Rotating — move the mouse';
+      G.lineNote = input.held('rotate') ? 'Rotating — move the mouse' : `Holding · ${g.dist.toFixed(1)} m · ${bindText('use', 1)}: THROW · ${bindText('grab', 1)}: drop · ${bindText('reelIn', 1)}/${bindText('reelOut', 1)}: closer/further · ${bindText('rotate', 1)}+mouse: turn`;
       g.target.copy(target());
       const wp = tv(g.body.pointToWorldFrame(g.local));
       // only snaps if it gets stuck far behind (e.g. you walked away from something wedged under a building)
@@ -273,20 +272,32 @@ export const grabTools = [{
       strand.setColor(tmpC.copy(cLoose).lerp(cTight, clamp((tens - 0.4) / 0.6, 0, 1)));
       const sag = clamp(1 - tens * 1.6, 0, 1) * Math.min(1.2, wp.distanceTo(hand) * 0.08);
       strand.update(hand, wp, sag, null);
-    } else if (snap) {
+      return;
+    }
+    G.lineNote = null;
+    if (snap) {
       snap.t -= dt;
       if (snap.t <= 0) { snap = null; strand.hide(); }
       else {
         strand.setColor(0xffffff);
         strand.update(G.aim.hand, G.aim.hand.clone().lerp(snap.to, snap.t / 0.12), 0, null);
       }
-    } else {
-      strand.hide();
+    } else strand.hide();
+    if (showHint) {
       const h = aimHit(HOOK_REACH);
+      G.crossHint = null;
       if (h) {
         const loose = h.body.type === CANNON.Body.DYNAMIC || dummyOf(h.body) || (h.body.ent && h.body.ent.frozen);
         G.crossHint = loose ? (h.dist <= REACH ? 'grab' : null) : 'hook';
       }
     }
   },
-}];
+};
+
+// "Hands": an empty hotbar slot. Clicking grabs with the line (like the grab key).
+export const handsTool = {
+  id: 'hands', name: 'Hands', icon: '✋', color: 0xffffff,
+  get hint() { return `Click or ${bindText('grab', 1)}: grab with your Fling Line (ground & walls: grappling hook)`; },
+  desc: 'No tool, just your Fling Line. Click grabs (same as the grab key). You always have the Fling Line, whatever tool you hold.',
+  down() { line.toggle(); },
+};

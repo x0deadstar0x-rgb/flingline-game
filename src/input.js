@@ -17,11 +17,11 @@ export const ACTIONS = [
   ['lookDown', 'Look down', 'Move'],
   ['lookLeft', 'Look left', 'Move'],
   ['lookRight', 'Look right', 'Move'],
-  ['use', 'Use tool / grab', 'Tools'],
-  ['alt', 'Throw / tool alt', 'Tools'],
-  ['reelIn', 'Line shorter', 'Tools'],
-  ['reelOut', 'Line longer', 'Tools'],
-  ['rotate', 'Rotate held thing (hold + mouse)', 'Tools'],
+  ['grab', 'Fling Line: grab / drop', 'Fling Line'],
+  ['use', 'Use tool · throw what you hold', 'Tools'],
+  ['reelIn', 'Line shorter (pull closer)', 'Fling Line'],
+  ['reelOut', 'Line longer (push away)', 'Fling Line'],
+  ['rotate', 'Rotate held thing (hold + mouse) · turn spawn', 'Fling Line'],
   ['nextItem', 'Next spawn item', 'Tools'],
   ['prevTool', 'Swap tool (back)', 'Tools'],
   ['nextTool', 'Swap tool (next)', 'Tools'],
@@ -47,7 +47,7 @@ const BASE = {
   forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
   jump: ['Space'], sprint: ['ShiftLeft', 'ShiftRight'], crouch: ['ControlLeft'], fly: ['KeyN'],
   lookUp: ['ArrowUp'], lookDown: ['ArrowDown'], lookLeft: ['ArrowLeft'], lookRight: ['ArrowRight'],
-  use: ['Mouse0', 'Enter'], alt: ['KeyF'], reelIn: ['KeyZ'], reelOut: ['KeyX'], rotate: ['KeyR'],
+  use: ['Mouse0', 'Enter'], grab: ['KeyF'], reelIn: ['KeyZ'], reelOut: ['KeyX'], rotate: ['KeyR'],
   nextItem: ['KeyT'], prevTool: ['KeyQ'], nextTool: ['KeyE'], undo: ['KeyU'], interact: ['KeyV'],
   slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'], slot4: ['Digit4'], slot5: ['Digit5'],
   slot6: ['Digit6'], slot7: ['Digit7'], slot8: ['Digit8'], slot9: ['Digit9'], slot10: ['Digit0'],
@@ -61,9 +61,9 @@ const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]
 //  'reel'  line shorter / longer while holding something
 //  'smart' line length while holding, otherwise switch hotbar slot
 export const PRESETS = {
-  touchpad: { name: 'Touchpad (no right click)', desc: 'Everything on one click + keyboard. Never needs a right click or two-finger click.', wheel: 'off', binds: with_({}) },
-  touchpad_rc: { name: 'Touchpad with right click', desc: 'Two-finger click throws / alt-fires. Two-finger scroll changes the line length.', wheel: 'reel', binds: with_({ alt: ['KeyF', 'Mouse2'] }) },
-  mouse: { name: 'Mouse + keyboard', desc: 'Right click throws / alt-fires, wheel changes line length (or tool when not holding), middle button rotates.', wheel: 'smart', binds: with_({ alt: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['KeyQ', 'Mouse3'], nextTool: ['KeyE', 'Mouse4'] }) },
+  touchpad: { name: 'Touchpad (no right click)', desc: 'Click uses your tool (or throws what you hold), F grabs. Never needs a right click or two-finger click.', wheel: 'off', binds: with_({}) },
+  touchpad_rc: { name: 'Touchpad with right click', desc: 'Two-finger click grabs / drops with the Fling Line, click throws. Two-finger scroll changes the line length.', wheel: 'reel', binds: with_({ grab: ['KeyF', 'Mouse2'] }) },
+  mouse: { name: 'Mouse + keyboard', desc: 'Right click grabs / drops, left click throws or uses your tool, wheel changes the line length (or tool when not holding), middle button rotates.', wheel: 'smart', binds: with_({ grab: ['KeyF', 'Mouse2'], rotate: ['KeyR', 'Mouse1'], prevTool: ['KeyQ', 'Mouse3'], nextTool: ['KeyE', 'Mouse4'] }) },
 };
 
 export const binds = {};

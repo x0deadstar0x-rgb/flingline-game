@@ -5,7 +5,7 @@ import { G, updatePopups, updateToast, toast } from './core.js';
 import { initAudio, toggleMute, setListener, setVolume, setAudioPaused } from './audio.js';
 import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, bindText } from './input.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
-import { updateGrabFx, rotateHeld } from './tools/grab.js';
+import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
@@ -220,20 +220,31 @@ function gameActions(dt) {
   // scroll wheel / two-finger scroll
   const w = input.wheel();
   if (w) {
-    const holding = G.grab && currentTool().id === 'fling';
-    if (holding && ctl.wheel !== 'off') G.reelBy && G.reelBy(w * 0.7);
+    if (G.grab && ctl.wheel !== 'off') G.reelBy && G.reelBy(w * 0.7);
     else if (ctl.wheel === 'smart') selectSlot((UI.slot + (w > 0 ? 1 : -1) + 10) % 10);
   }
-  // tool use
   const tool = currentTool();
-  if (input.tap('use')) {
-    if (tool.down) tool.down();
-    if (tool.id !== 'fling') G.player.kick = Math.max(G.player.kick || 0, 0.25);
+  // the Fling Line is always with you: grab key grabs / drops (or cancels a half-made rope / weld)
+  if (input.tap('grab')) {
+    if (!G.grab && tool.cancel && tool.cancel()) { /* cancelled */ }
+    else line.toggle();
   }
-  if (input.tap('alt') && tool.alt) tool.alt();
+  // click: throw what you hold (or zip to the hook), otherwise use the tool
+  if (input.tap('use')) {
+    if (G.grab) { line.throwIt(); useLock = true; }
+    else {
+      useLock = false;
+      if (tool.down) tool.down();
+      if (tool.id !== 'hands') G.player.kick = Math.max(G.player.kick || 0, 0.25);
+    }
+  }
+  if (!input.held('use')) useLock = false;
+  if (input.tap('rotate') && !G.grab && tool.rotate) tool.rotate();
+  line.update(dt, input, tool.id === 'hands');
   if (tool.update) tool.update(dt, input);
-  if (input.held('use') && tool.held) tool.held(dt);
+  if (input.held('use') && !useLock && !G.grab && tool.held) tool.held(dt);
 }
+let useLock = false; // after a throw, holding the button doesn't also fire the tool
 
 function frame() {
   requestAnimationFrame(frame);
@@ -257,7 +268,7 @@ function frame() {
   const active = playing && !UI.menuOpen;
   const k = (a) => active && input.held(a);
   // holding "rotate" with the Fling Line: the mouse turns the held object instead of the camera
-  if (active && input.held('rotate') && G.grab && currentTool().id === 'fling' && rotateHeld(input.lookX, input.lookY)) { input.lookX = 0; input.lookY = 0; }
+  if (active && input.held('rotate') && G.grab && rotateHeld(input.lookX, input.lookY)) { input.lookX = 0; input.lookY = 0; }
   const pin = {
     f: k('forward'), b: k('back'), l: k('left'), r: k('right'),
     sprint: k('sprint'), sprintDown: k('sprint'), crouch: k('crouch'),

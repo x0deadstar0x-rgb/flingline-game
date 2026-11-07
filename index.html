@@ -66,6 +66,9 @@
   .slot.on .k { color: #000; }
   @media (max-width: 700px) { .slot { width: 40px; height: 44px; } .slot .i { font-size: 18px; } #toolinfo { bottom: 66px; } }
 
+  #grabkey { position: fixed; left: 16px; bottom: 22px; font: 700 11px var(--mono); letter-spacing: 1.5px; color: rgba(255,255,255,0.85); text-shadow: 0 1px 2px rgba(0,0,0,0.8); display: flex; gap: 8px; align-items: center; }
+  #grabkey kbd { font: inherit; color: #fff; border: 1px solid rgba(255,255,255,0.6); padding: 3px 7px; background: rgba(0,0,0,0.35); }
+  @media (max-width: 700px) { #grabkey { bottom: 76px; } }
   #toast { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); background: #000; color: #fff; border: 1px solid #fff; padding: 9px 16px; font: 700 12px var(--mono); letter-spacing: 1.5px; text-transform: uppercase; opacity: 0; transition: opacity .2s; z-index: 7; pointer-events: none; }
   #popups { position: fixed; inset: 0; pointer-events: none; z-index: 6; overflow: hidden; }
   .popup { position: absolute; left: 0; top: 0; font-weight: 900; white-space: nowrap; letter-spacing: 1px; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.6); }
@@ -172,6 +175,25 @@
   body.light .slot .k { color: rgba(0,0,0,0.55); }
   body.light .slot.on { background: #111; border-color: #111; }
   body.light .slot.on .k { color: #fff; }
+
+  /* ---------- controls screen */
+  .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .preset { background: var(--panel); border: 0; text-align: left; padding: 14px 16px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+  .preset .n { font-weight: 800; font-size: 13.5px; }
+  .preset .s { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
+  .preset:hover, .preset.on { background: #fff; color: #000; }
+  .preset:hover .s, .preset.on .s { color: #444; }
+  .controls h3 { margin: 22px 0 4px !important; }
+  .krow { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .krow .kl { font-size: 13px; }
+  .kbox { display: flex; gap: 6px; }
+  .kb { min-width: 120px; background: transparent; border: 1px solid var(--line2); padding: 6px 10px; font: 700 11px var(--mono); letter-spacing: 1px; color: var(--txt); cursor: pointer; text-transform: uppercase; }
+  .kb.empty { color: var(--dim); }
+  .kb:hover { background: #fff; color: #000; }
+  .kb.wait { background: #fff; color: #000; animation: blink 0.8s infinite; }
+  @keyframes blink { 50% { opacity: 0.55; } }
+  body.light .preset:hover, body.light .preset.on, body.light .kb:hover, body.light .kb.wait { background: #111; color: #fff; }
+  body.light .preset:hover .s, body.light .preset.on .s { color: #bbb; }
 </style>
 </head>
 <body>
@@ -183,6 +205,7 @@
   <div id="crosshair"></div>
   <div id="toolinfo"><div id="toolname"></div><div id="toolhint"></div><div id="toolnote"></div></div>
   <div id="hotbar"></div>
+  <div id="grabkey"></div>
 </div>
 <div id="toast"></div>
 <div id="popups"></div>
@@ -197,7 +220,8 @@
       <button data-tab="items">Spawn</button>
       <button data-tab="maps">Maps</button>
       <button data-tab="settings">Settings</button>
-      <button data-tab="help">Controls</button>
+      <button data-tab="controls">Controls</button>
+      <button data-tab="help">Help</button>
       <div class="spacer"></div>
       <button id="menuclose">Play</button>
       <div class="tip">TAB / ESC TO CLOSE</div>
@@ -260,11 +284,11 @@
     <button class="go">CLICK TO PLAY</button>
     <div class="keys">
       <div><kbd>WASD</kbd> move</div>
-      <div><kbd>CLICK</kbd> grab / drop</div>
-      <div><kbd>F</kbd> throw</div>
+      <div><kbd>F</kbd> grab / drop</div>
+      <div><kbd>CLICK</kbd> throw / use tool</div>
       <div><kbd>Z X</kbd> line length</div>
       <div><kbd>1-0</kbd> tools</div>
-      <div><kbd>TAB</kbd> menu</div>
+      <div><kbd>TAB</kbd> menu · controls</div>
     </div>
   </div>
 </div>

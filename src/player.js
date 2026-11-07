@@ -103,6 +103,9 @@ export class Player {
     if (input.l) mv.sub(right);
     if (mv.lengthSq() > 0) mv.normalize();
     let speed = input.sprint ? 12 : 7;
+    // crouch: lower view, slow and steady
+    this.crouchT = (this.crouchT || 0) + (((input.crouch && !this.flying) ? 1 : 0) - (this.crouchT || 0)) * Math.min(1, dt * 12);
+    if (input.crouch && !this.flying) speed = 3.2;
     if (swim) speed = 4.5;
     if (this.flying) speed = input.sprint ? 30 : 16;
     this.stun = Math.max(0, this.stun - dt * (this.grounded ? 3 : 1));
@@ -150,7 +153,7 @@ export class Player {
     // camera follows the physics-interpolated position (no stutter at high refresh rates)
     // with light vertical smoothing so contact jitter can never bob the view
     const ip = b.interpolatedPosition;
-    const ty = ip.y + 0.65;
+    const ty = ip.y + 0.65 - (this.crouchT || 0) * 0.55;
     if (this.camY === undefined || Math.abs(ty - this.camY) > 1.5) this.camY = ty;
     else this.camY += (ty - this.camY) * Math.min(1, dt * 22);
     const pivot = new THREE.Vector3(ip.x, this.camY, ip.z);

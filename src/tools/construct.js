@@ -8,7 +8,7 @@ import { sfx } from '../audio.js';
 import * as FX from '../fx.js';
 import { aimHit, aimPoint, dummyOf } from './common.js';
 import { bindText } from '../input.js';
-function cancelPending() { if (pending) { pending = null; toast('Cancelled'); } }
+function cancelPending() { if (pending) { pending = null; toast('Cancelled'); return true; } return false; }
 
 function cool(tool, dt) { tool.cd = Math.max(0, (tool.cd || 0) - dt); }
 
@@ -64,16 +64,16 @@ function twoClickUpdate(tool, input, color) {
     const h = aimHit(80);
     pendStrand.setColor(color);
     pendStrand.update(a, h ? h.point : G.aim.start.clone().addScaledVector(G.aim.dir, 10), 0.3);
-    G.toolNote = `Click the second point (${bindText('alt', 1)} to cancel)`;
+    G.toolNote = `Click the second point (${bindText('grab', 1)} to cancel)`;
   } else { pendStrand.hide(); G.toolNote = null; }
 }
 
 export const buildTools = [
   {
-    id: 'spawner', name: 'Spawner', icon: '🧰', color: 0x3a86ff, get hint() { return `Click: spawn the selected item · ${bindText('alt', 1)}: turn it 45° · ${bindText('nextItem', 1)}: next item · ${bindText('menu', 1)}: pick from menu`; },
+    id: 'spawner', name: 'Spawner', icon: '🧰', color: 0x3a86ff, get hint() { return `Click: spawn the selected item · ${bindText('rotate', 1)}: turn it 45° · ${bindText('nextItem', 1)}: next item · ${bindText('menu', 1)}: pick from menu`; },
     desc: 'Puts the selected thing where you aim. A see-through preview shows where it goes; big builds turn red if something is in the way.',
     turn: 0,
-    alt() { this.turn = (this.turn + Math.PI / 4) % (Math.PI * 2); },
+    rotate() { this.turn = (this.turn + Math.PI / 4) % (Math.PI * 2); },
     // where (and how rotated) the current item would appear
     placement() {
       const def = ITEMS[G.spawnId];
@@ -191,7 +191,7 @@ export const buildTools = [
       pending = null;
       sfx.grab();
     },
-    alt() { cancelPending(); },
+    cancel() { return cancelPending(); },
     update(dt, input) { twoClickUpdate(this, input, 0xe8dcc0); },
     unequip() { pending = null; if (pendStrand) pendStrand.hide(); G.toolNote = null; },
   },
@@ -209,7 +209,7 @@ export const buildTools = [
       pending = null;
       sfx.weld ? sfx.weld() : sfx.crack();
     },
-    alt() { cancelPending(); },
+    cancel() { return cancelPending(); },
     update(dt, input) { twoClickUpdate(this, input, 0xffa62b); },
     unequip() { pending = null; if (pendStrand) pendStrand.hide(); G.toolNote = null; },
   },

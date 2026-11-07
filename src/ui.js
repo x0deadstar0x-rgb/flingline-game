@@ -6,6 +6,7 @@ import { TOOLS, TOOL, TOOL_GROUPS, DEFAULT_HOTBAR } from './tools/index.js';
 import { CATALOG, ITEMS } from './items.js';
 import { MAPS, loadMap } from './map.js';
 import { S, setSetting, DEFAULTS } from './settings.js';
+import { bindText, ACTIONS, PRESETS, binds, ctl, applyPreset, setBind, keyName, captureNext, saveControls } from './input.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,7 +20,9 @@ export const UI = {
 };
 
 try {
-  const saved = JSON.parse(localStorage.getItem('fling_hotbar') || 'null');
+  const saved = (JSON.parse(localStorage.getItem('fling_hotbar') || 'null') || null);
+  // the Fling Line used to be a tool; it is always with you now
+  if (Array.isArray(saved)) for (let i = 0; i < saved.length; i++) if (saved[i] === 'fling') saved[i] = 'hands';
   if (Array.isArray(saved) && saved.length === 10 && saved.every((id) => TOOL[id])) UI.hotbar = saved;
 } catch (e) { /* ignore */ }
 function saveHotbar() { try { localStorage.setItem('fling_hotbar', JSON.stringify(UI.hotbar)); } catch (e) { /* ignore */ } }
@@ -149,6 +152,73 @@ function renderSettings(body) {
   wrap.appendChild(reset);
 }
 
+// Controls: presets + rebind every action (keys, mouse buttons)
+let waiting = null; // [action, slot] being rebound
+function renderControls(body) {
+  const wrap = document.createElement('div');
+  wrap.className = 'settings controls';
+  body.appendChild(wrap);
+  // presets
+  const pre = document.createElement('div');
+  pre.className = 'presets';
+  for (const id in PRESETS) {
+    const p = PRESETS[id];
+    const b = document.createElement('button');
+    b.className = 'preset' + (ctl.preset === id ? ' on' : '');
+    b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="s">${esc(p.desc)}</span>`;
+    b.onclick = (e) => { e.stopPropagation(); applyPreset(id); renderMenu(); toast(p.name); };
+    pre.appendChild(b);
+  }
+  wrap.appendChild(pre);
+  // wheel
+  const wr = document.createElement('div');
+  wr.className = 'srow';
+  wr.innerHTML = '<div class="sl"><div class="n">Scroll wheel / two-finger scroll</div><div class="s">What scrolling does in game.</div></div>';
+  const seg = document.createElement('div'); seg.className = 'sctl seg';
+  for (const [v, label] of [['off', 'Nothing'], ['reel', 'Line length'], ['smart', 'Line length + tools']]) {
+    const b = document.createElement('button'); b.textContent = label; b.className = ctl.wheel === v ? 'on' : '';
+    b.onclick = (e) => { e.stopPropagation(); ctl.wheel = v; saveControls(); renderMenu(); };
+    seg.appendChild(b);
+  }
+  wr.appendChild(seg); wrap.appendChild(wr);
+  // every action
+  let group = null;
+  for (const [id, label, g] of ACTIONS) {
+    if (g !== group) { group = g; const h = document.createElement('h3'); h.textContent = g; wrap.appendChild(h); }
+    const r = document.createElement('div');
+    r.className = 'krow';
+    r.innerHTML = `<div class="kl">${esc(label)}</div>`;
+    const box = document.createElement('div'); box.className = 'kbox';
+    for (let i = 0; i < 2; i++) {
+      const b = document.createElement('button');
+      const isWaiting = waiting && waiting[0] === id && waiting[1] === i;
+      b.className = 'kb' + (isWaiting ? ' wait' : '') + ((binds[id] || [])[i] ? '' : ' empty');
+      b.textContent = isWaiting ? 'Press a key or button…' : keyName((binds[id] || [])[i]);
+      b.title = 'Click, then press a key or mouse button. Esc cancels, Backspace clears.';
+      b.onclick = (e) => {
+        e.stopPropagation();
+        waiting = [id, i];
+        renderMenu();
+        setTimeout(() => captureNext((code) => {
+          waiting = null;
+          if (code === 'Escape') { renderMenu(); return; }
+          if (code === 'Backspace' || code === 'Delete') setBind(id, i, null);
+          else setBind(id, i, code);
+          renderMenu();
+        }), 0);
+      };
+      box.appendChild(b);
+    }
+    r.appendChild(box);
+    wrap.appendChild(r);
+  }
+  const reset = document.createElement('button');
+  reset.className = 'sreset';
+  reset.textContent = `Reset to "${PRESETS[ctl.preset].name}"`;
+  reset.onclick = (e) => { e.stopPropagation(); applyPreset(ctl.preset); renderMenu(); };
+  wrap.appendChild(reset);
+}
+
 function renderHotbarEditor() {
   const row = $('hbedit');
   row.innerHTML = '';
@@ -202,10 +272,51 @@ export function renderMenu() {
     $('menutitle').textContent = 'Settings';
     $('menusub').textContent = 'Saved automatically in this browser.';
     renderSettings(body);
-  } else {
+  } else if (UI.tab === 'controls') {
     $('menutitle').textContent = 'Controls';
-    $('menusub').textContent = 'Single click + keyboard only. No right-click or two-finger click needed.';
-    body.innerHTML += $('helptext').innerHTML;
+    $('menusub').textContent = 'Pick a preset, then click any key box to change it. Saved automatically.';
+    renderControls(body);
+  } else {
+    $('menutitle').textContent = 'Help';
+    $('menusub').textContent = 'How things work. Keys shown are your current controls (change them under Controls).';
+    const k = (a) => `<kbd>${esc(bindText(a))}</kbd>`;
+    body.innerHTML += `
+      <h3>Fling Line (always with you)</h3>
+      <div class="help">
+        <div>${k('grab')} grab something / drop it</div>
+        <div>${k('use')} while holding: THROW it</div>
+        <div>${k('reelIn')} / ${k('reelOut')} pull closer / push away</div>
+        <div>hold ${k('rotate')} + move mouse: turn what you hold</div>
+        <div>Grab the ground or a wall: grappling hook — swing, reel in, ${k('use')} to zip</div>
+        <div>Anything can be lifted. Heavy things just move slower.</div>
+      </div>
+      <h3>Moving</h3>
+      <div class="help">
+        <div>${k('forward')} ${k('left')} ${k('back')} ${k('right')} move</div>
+        <div>${k('jump')} jump · double jump</div>
+        <div>${k('sprint')} sprint · fly down</div>
+        <div>${k('fly')} fly mode</div>
+        <div>${k('interact')} get in / out of a car</div>
+        <div>${k('slowmo')} slow motion</div>
+      </div>
+      <h3>Tools</h3>
+      <div class="help">
+        <div>${k('use')} use your tool (hold for automatic ones)</div>
+        <div>${k('slot1')} – ${k('slot10')} hotbar slots</div>
+        <div>${k('prevTool')} / ${k('nextTool')} swap the tool in this slot</div>
+        <div>${k('nextItem')} next spawn item · ${k('rotate')} turn it</div>
+        <div>${k('menu')} this menu (tools, spawn, maps, settings)</div>
+        <div>${k('undo')} undo last spawn · ${k('clear')} clear spawned stuff</div>
+      </div>
+      <h3>Other</h3>
+      <div class="help">
+        <div>${k('resetMap')} reset the map</div>
+        <div>${k('mute')} mute · ${k('quality')} low / high graphics</div>
+        <div>${k('sensDown')} / ${k('sensUp')} mouse sensitivity</div>
+        <div>${k('photo')} hide the HUD (photo mode)</div>
+        <div><kbd>ESC</kbd> free the mouse (pauses the game)</div>
+        <div>The game pauses completely whenever the menu is open.</div>
+      </div>`;
   }
   if (!body.children.length) body.innerHTML = '<p class="empty">Nothing matches that search.</p>';
 }
@@ -241,5 +352,7 @@ export function updateHud(dt) {
   $('stats').innerHTML = `<div class="row"><span>BOOMS</span><b>${s.booms}</b><span>BROKEN</span><b>${s.destroyed}</b><span>FLUNG</span><b>${s.flings}</b><span>BEST</span><b>${s.best.toFixed(1)}m</b><span>KOS</span><b>${s.kos || 0}</b></div>` +
     `<div class="dim">${G.map ? G.map.name.toUpperCase() : ''} · ${G.ents.size} OBJECTS · ${fps} FPS${G.timeScale < 1 ? ' · SLOW-MO' : ''}${G.player && G.player.flying ? ' · FLYING' : ''}</div>`;
   $('crosshair').className = G.crossHint || '';
-  $('toolnote').textContent = G.toolNote || '';
+  $('toolnote').textContent = G.lineNote || G.toolNote || '';
+  const gk = $('grabkey');
+  if (gk) { const t = `${bindText('grab', 1)}`; if (gk.dataset.k !== t + !!G.grab) { gk.dataset.k = t + !!G.grab; gk.innerHTML = `<kbd>${esc(t)}</kbd>${G.grab ? 'DROP' : 'FLING LINE'}`; } }
 }
