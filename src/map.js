@@ -903,6 +903,7 @@ export function clearWorld() {
   G.blackholes.length = 0;
   G.cubeSinks = [];
   G.firePatches = [];
+  if (G.clearWeather) G.clearWeather();
   G.timers.length = 0;
   G.burning = 0;
 }

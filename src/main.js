@@ -14,7 +14,7 @@ import { updateBubbles } from './dummy.js';
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
-import { TOOL, updateProjectiles, updateBlackHoles } from './tools/index.js';
+import { TOOL, updateProjectiles, updateBlackHoles, updateTornados, updateQuake, updateStorms } from './tools/index.js';
 import { initViewmodel, renderViewmodel } from './viewmodel.js';
 import { VoxelBroadphase } from './terrain.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
@@ -411,6 +411,7 @@ function frame() {
   }
   updateProjectiles(dt);
   updateBlackHoles(dt);
+  updateTornados(dt); updateQuake(dt); updateStorms(dt);
   updateMap(dt);
   updateFx(dt);
   updateNukes(dt);

@@ -261,6 +261,7 @@ export const CATALOG = [
     { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, 0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.24, h: 0.22, off: [0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('trampoline', 'Trampoline', '🤸', 'Fun', { shape: 'box', size: [3, 0.35, 3], mat: 'rubber', color: 0x3a86ff, massMul: 4 }),
   B('vending', 'Vending Machine', '🥤', 'Stuff', { shape: 'compound', mat: 'appliance', parts: [
     { t: 'box', size: [1.1, 2.0, 0.9], off: [0, 0, 0], color: 0xd2232a },
     { t: 'box', size: [0.7, 1.2, 0.05], off: [-0.12, 0.25, 0.46], tex: 'window' }] }),
