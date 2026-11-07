@@ -7,7 +7,10 @@ import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope, addRop
 import { spawnDummy } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
-import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater } from './terrain.js';
+import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater, addGridStatic } from './terrain.js';
+import { setBuildingGroup, clearBuildings } from './buildings.js';
+import { addPool, clearPools, updatePools } from './liquids.js';
+import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT } from './city.js';
 
 let mapGroup = null;
 let mapBodies = [];
@@ -40,7 +43,9 @@ function addStatic(shape, pos, quat, mesh) {
   b.addShape(shape);
   b.position.set(pos.x, pos.y, pos.z);
   if (quat) b.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+  b.isGridStatic = true; // found through the scenery grid, not the general pair search
   G.world.addBody(b);
+  addGridStatic(b);
   mapBodies.push(b);
   if (mesh) {
     mesh.position.copy(pos);
@@ -76,6 +81,30 @@ function tree(x, y, z, s = 1) {
     deco(cone, x, y + (2.2 + i * 0.9) * s, z);
   }
   addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+}
+// lots of trees at once (big maps): a few instanced meshes for all of them, a collider each
+const trunkGeoI = new THREE.CylinderGeometry(0.22, 0.32, 2.2, 6), coneGeoI = new THREE.ConeGeometry(1, 1, 7);
+function forest(list, colors = null) {
+  if (!list.length) return;
+  const cols = colors || (snowyTrees ? [0xeef4f8] : leafCols);
+  const trunks = new THREE.InstancedMesh(trunkGeoI, smat(0x7a5230), list.length);
+  const per = cols.map(() => []);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  list.forEach(([x, y, z, s], n) => {
+    trunks.setMatrixAt(n, m4.compose(new THREE.Vector3(x, y + 1.1 * s, z), q.identity(), new THREE.Vector3(s, s, s)));
+    const ci = (r01() * cols.length) | 0;
+    for (let i = 0; i < 3; i++) per[ci].push(m4.clone().compose(new THREE.Vector3(x, y + (2.2 + i * 0.9) * s, z), q.setFromEuler(e.set(0, r01() * 3, 0)), new THREE.Vector3((1.6 - i * 0.4) * s, 1.6 * s, (1.6 - i * 0.4) * s)));
+    addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, null);
+    addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+  });
+  for (const m of [trunks]) { m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; mapGroup.add(m); }
+  per.forEach((mats, ci) => {
+    if (!mats.length) return;
+    const im = new THREE.InstancedMesh(coneGeoI, smat(cols[ci]), mats.length);
+    mats.forEach((mm, k) => im.setMatrixAt(k, mm));
+    im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
+    mapGroup.add(im);
+  });
 }
 function rock(x, y, z, r = 1) {
   const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), smat(0x8a8f96));
@@ -178,7 +207,7 @@ const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0
 export function craterRadius(power) { return 1.9 * Math.pow(power, 0.55); }
 export function crater(pos, power, opts = {}) {
   const R = opts.craterRadius ?? craterRadius(power);
-  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.fire ? 0.7 : 1.0 });
+  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.flat ?? (opts.fire ? 0.7 : 1.0), scorch: opts.scorch });
   if (!res) return null;
   const at = new THREE.Vector3(pos.x, res.ground, pos.z);
   const cols = res.sample.length ? res.sample : [0x6b4f35];
@@ -323,14 +352,40 @@ function hillsHeight(x, z) {
   h += 26 * Math.exp(-((x + 45) ** 2 + (z + 20) ** 2) / 380);
   h -= 11 * Math.exp(-((x + 5) ** 2 + (z + 5) ** 2) / 420);
   const edge = Math.max(Math.abs(x), Math.abs(z));
-  if (edge > 90) h += (edge - 90) * 1.2;
+  if (edge > 115) h += (edge - 115) * 1.2;
   const sp = Math.hypot(x, z - 50);
   if (sp < 16) h = h * (sp / 16) + 2 * (1 - sp / 16);
   return h + 2;
 }
+// a tunnel through the ground: points [x, y, z, radius]
+function tunnel(stamp, pts) {
+  for (let s = 0; s < pts.length - 1; s++) {
+    const a = pts[s], b = pts[s + 1];
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), n = Math.max(1, Math.ceil(L / 0.6));
+    for (let q = 0; q <= n; q++) {
+      const t = q / n, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t, z = a[2] + (b[2] - a[2]) * t;
+      stamp(x, y, z, (a[3] + (b[3] - a[3]) * t) * (0.92 + 0.16 * Math.sin(x * 1.3 + z * 0.7)));
+    }
+  }
+}
+// glowing crystals growing out of a cave floor
+const crystalGeo = new THREE.ConeGeometry(0.2, 1, 5);
+function crystals(x, yHint, z, s, color) {
+  const fy = G.floorAt ? G.floorAt(x, yHint, z) : -1e9;
+  if (fy < -1e8) return;
+  const m0 = matCache['cr' + color] || (matCache['cr' + color] = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, flatShading: true, roughness: 0.25 }));
+  for (let q = 0; q < 5; q++) {
+    const h = (0.5 + r01() * 1.3) * s;
+    const m = new THREE.Mesh(crystalGeo, m0);
+    m.scale.set(s, h, s);
+    m.position.set(x + rr(-0.5, 0.5) * s, fy + h / 2 - 0.08, z + rr(-0.5, 0.5) * s);
+    m.rotation.set(rr(-0.4, 0.4), rr(0, 3), rr(-0.4, 0.4));
+    mapGroup.add(m);
+  }
+}
 function buildHills() {
   srand(23);
-  makeTerrain({ W: 240, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
+  makeTerrain({ W: 300, es: 3, height: hillsHeight, bedrock: -10, color: (h) => (h < 0.3 ? 0xe2cf95 : h < 14 ? 0x5fae4a : h < 22 ? 0x7d8288 : 0xf4f7fb) });
   water1(-1);
   const gh = groundHeight;
   const cx = 45, cz = -35, cy = gh(cx, cz);
@@ -351,11 +406,11 @@ function buildHills() {
     for (let i = 0; i < 6; i++) put('duck', -5 + rand(-8, 8), -0.6, -5 + rand(-8, 8));
   });
   pad(-8, gh(-8, 54), 54, new THREE.Vector3(-12, 22, -30), 0xffb703);
-  for (let i = 0; i < 110; i++) {
-    const x = rr(-95, 95), z = rr(-95, 95), y = gh(x, z);
+  for (let i = 0; i < 170; i++) {
+    const x = rr(-118, 118), z = rr(-118, 118), y = gh(x, z);
     if (y > 1 && y < 15 && Math.hypot(x, z - 50) > 14 && Math.hypot(x - 45, z + 35) > 14) tree(x, y - 0.2, z, rr(0.8, 1.5));
   }
-  for (let i = 0; i < 30; i++) { const x = rr(-95, 95), z = rr(-95, 95); rock(x, gh(x, z), z, rr(0.6, 2)); }
+  for (let i = 0; i < 45; i++) { const x = rr(-118, 118), z = rr(-118, 118); rock(x, gh(x, z), z, rr(0.6, 2)); }
   for (let i = 0; i < 12; i++) { const x = rand(-30, 30), z = rand(20, 60); spawnDummy(new THREE.Vector3(x, gh(x, z) + 0.1, z), i % 6 === 5 ? 'tiny' : 'normal'); }
   spawnDummy(new THREE.Vector3(cx, cy + 0.3, cz), 'big');
 }
@@ -387,41 +442,312 @@ function buildSky() {
 // ---- City: destructible buildings made of concrete blocks
 function buildCity() {
   srand(41);
-  const road = (v) => Math.abs(((v % 40) + 40) % 40 - 20) > 14; // roads every 40 m
+  const blocks = planCity(r01);
+  const blockAt = (x, z) => { const gx = Math.round(x / PITCH), gz = Math.round(z / PITCH); return blocks.find((k) => k.gx === gx && k.gz === gz) || null; };
+  const loc = (v) => { const m = ((v % PITCH) + PITCH * 1.5) % PITCH - PITCH / 2; return m; }; // -24..24 inside a block
+  const ROADH = PITCH / 2 - ROAD / 2; // past this (from a block's centre) it's road
+  const underBuilding = (x, z) => { const blk = blockAt(x, z); return blk && lotAt([blk], x, z); };
   makeTerrain({
-    W: 200, es: 2, bedrock: -6, height: () => 0,
-    color: (h, x, z) => (road(x) || road(z) ? 0x3a3d42 : (Math.abs(((x % 40) + 40) % 40 - 20) > 12 || Math.abs(((z % 40) + 40) % 40 - 20) > 12) ? 0xb9b4aa : 0x6aa857),
+    W: 264, es: 2, bedrock: -6,
+    height: (x, z) => (underBuilding(x, z) ? -0.5 : 0),
+    color: (h, x, z) => {
+      const lx = loc(x), lz = loc(z), ax = Math.abs(lx), az = Math.abs(lz);
+      const rx = ax > ROADH, rz = az > ROADH; // on a road running along z / along x
+      if (rx || rz) {
+        if (rx && rz) return 0x34373c; // crossing
+        const across = rx ? lz : lx, along = rx ? z : x, off = rx ? ax : az;
+        if (Math.abs(across) > LOT && Math.abs(across) <= LOT + WALK) return (Math.floor((rx ? x : z) * 2) & 1) ? 0xd8d8d0 : 0x34373c; // zebra crossing
+        if (off > PITCH / 2 - 0.3 && (Math.floor(along / 3) & 1)) return 0xe0b43a; // dashed centre line
+        if (off > ROADH && off < ROADH + 0.5) return 0xc9c9c2; // edge line
+        return 0x34373c;
+      }
+      if (ax > LOT || az > LOT) return ((Math.floor(x / 2) + Math.floor(z / 2)) & 1) ? 0xb5b0a6 : 0xaba69c; // sidewalk
+      const blk = blockAt(x, z);
+      const use = blk ? blk.use : 'plaza';
+      if (h < -0.1) return 0x8a8a84; // under a building
+      if (use === 'park') return (Math.abs(lx) < 1.5 || Math.abs(lz) < 1.5 || Math.abs(Math.abs(lx) - Math.abs(lz)) < 1.2) ? 0xc2b38f : ((Math.floor(x) + Math.floor(z * 1.3)) % 7 === 0 ? 0x6aa857 : 0x5f9e4a);
+      if (use === 'parking') return (Math.abs(lz) < 3) ? 0x45484d : ((Math.abs(lx % 3) < 0.25 && Math.abs(lz) > 4) ? 0xe2e2da : 0x45484d);
+      if (use === 'plaza') return ((Math.floor(x / 1.5) + Math.floor(z / 1.5)) & 1) ? 0xd2cbbb : 0xc4bdad;
+      return ((Math.floor(x) + Math.floor(z)) & 1) ? 0xbfb9ac : 0xb5afa2;
+    },
   });
-  // background skyline (solid)
-  for (let i = 0; i < 26; i++) {
-    const a = (i / 26) * Math.PI * 2, r = 110 + rr(0, 30), h = rr(25, 70);
-    sbox(rr(12, 20), h, rr(12, 20), Math.cos(a) * r, h / 2, Math.sin(a) * r, [0x8b95a1, 0x6e7781, 0xa3acb6, 0x5f6973][i % 4]);
+  setBuildingGroup(mapGroup);
+  buildCityBlocks(blocks, r01);
+  // far skyline beyond the edge (just scenery)
+  for (let i = 0; i < 34; i++) {
+    const a = (i / 34) * Math.PI * 2 + rr(-0.05, 0.05), r = rr(170, 215), h = rr(30, 95), w = rr(14, 26);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, rr(14, 26)), smat([0x8b95a1, 0x6e7781, 0xa3acb6, 0x5f6973, 0x7d8a99][i % 5]));
+    m.rotation.y = rr(0, 3);
+    deco(m, Math.cos(a) * r, h / 2 - 1, Math.sin(a) * r);
   }
+  // plaza: fountain, trees, benches, a launch pad
+  scyl(4.2, 0.7, 0, 0.35, -9, 0xbdb6a6, null, 16);
+  const pool = new THREE.Mesh(new THREE.CylinderGeometry(3.7, 3.7, 0.1, 16), new THREE.MeshStandardMaterial({ color: 0x4aa3d8, roughness: 0.2, metalness: 0.1 }));
+  deco(pool, 0, 0.66, -9);
+  scyl(0.5, 2.4, 0, 1.6, -9, 0xd8d2c4, null, 8);
+  for (const [x, z] of [[-10, -10], [10, -10], [-10, 10], [10, 10], [-12, 0], [12, 0]]) tree(x, 0, z, 1.1);
+  pad(0, 0, 4, new THREE.Vector3(0, 30, 0));
   sleepy(() => {
-    const blocks = [[0, 0], [40, 0], [-40, 0], [0, -40], [40, -40], [-40, -40], [40, 40], [-40, 40]];
-    blocks.forEach(([bx, bz], k) => {
-      if (k === 0) return; // central plaza
-      if (k % 3 === 0) buildPrefab('skyscraper', new THREE.Vector3(bx, 0, bz), 0, false);
-      else if (k % 3 === 1) { stack('concrete_big', bx - 4, 0, bz, 3, 3, 4 + (k % 3), 2); stack('concrete_big', bx + 6, 0, bz + 4, 2, 2, 3, 2); }
-      else { buildPrefab('house', new THREE.Vector3(bx - 5, 0, bz - 3), 0, false); buildPrefab('house', new THREE.Vector3(bx + 5, 0, bz + 4), Math.PI, false); }
-    });
-    // plaza fountain-ish + props
-    buildPrefab('arch', new THREE.Vector3(0, 0, -6), 0, false);
-    for (let i = 0; i < 6; i++) put('car', -20 + rand(-1, 1), 0, -30 + i * 10, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2) });
-    for (let i = 0; i < 5; i++) put('car', -30 + i * 12, 0, 20, {});
-    for (let i = 0; i < 14; i++) put('cone', rand(-60, 60), 0, 20 + rand(-1.5, 1.5));
-    for (let i = 0; i < 10; i++) put('lamp', -60 + i * 13, 0, 13.5);
-    for (let i = 0; i < 5; i++) put('bench', -52 + i * 26, 0, 14.5); // facing the street
-    for (let i = 0; i < 6; i++) put('barrier', 18 + rand(-1, 1), 0, -20 + i * 3);
-    for (let i = 0; i < 5; i++) put('mailbox', rand(-12, 12), 0, rand(-12, 12));
-    put('vending', 6, 0, 6); put('vending', 7.3, 0, 6);
-    for (let i = 0; i < 4; i++) put('bin', -6 + i * 4, 0, 8);
-    pallets(-4, 0, 12, 3);
-    buildPrefab('pallets', new THREE.Vector3(10, 0, -10), 0, false);
+    for (const [x, z, r] of [[-6, -14, 0], [6, -14, 0], [-14, -6, Math.PI / 2], [14, -6, -Math.PI / 2]]) put('bench', x, 0, z, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), r) });
+    put('vending', 13, 0, 13); put('vending', 14.3, 0, 13);
+    for (let i = 0; i < 4; i++) put('bin', -13 + i * 0.1, 0, 12 - i * 8);
+    // street lamps round the plaza and along the main streets
+    for (let i = -4; i <= 4; i++) { if (i === 0) continue; put('lamp', i * 11, 0, 16.8); put('lamp', i * 11, 0, -16.8); }
+    for (let i = -4; i <= 4; i += 2) { if (i === 0) continue; put('lamp', 16.8, 0, i * 11); put('lamp', -16.8, 0, i * 11); }
+    // parked cars along the streets
+    for (let i = 0; i < 18; i++) {
+      const along = i % 2 === 0, side = (i >> 1) % 2 ? 1 : -1;
+      const road = (Math.floor(r01() * 4) - 2) * PITCH + PITCH / 2; // one of the roads
+      const t = rr(-90, 90);
+      const off = road + side * (ROAD / 2 - 1.4);
+      if (along) put('car', t, 0, off, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2 + (side > 0 ? Math.PI : 0)) });
+      else put('car', off, 0, t, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), side > 0 ? Math.PI : 0) });
+    }
+    for (let i = 0; i < 8; i++) put('mailbox', rr(-90, 90), 0, (r01() < 0.5 ? -1 : 1) * 16.5 + (r01() < 0.5 ? 48 : 0));
+    // road works
+    for (let i = 0; i < 8; i++) put('cone', 30 + i * 2.2, 0, PITCH / 2 + 2);
+    for (let i = 0; i < 4; i++) put('barrier', 28 + i * 3.2, 0, PITCH / 2 - 2);
   });
-  pad(0, 0, 0, new THREE.Vector3(0, 30, 0));
-  sbox(8, 0.5, 20, 60, 3, 20, 0xffbe0b, null, [0.3, 0, 0]);
-  crowd(16, 0, 10, 20); crowd(3, 0, -20, 10, 0, ['zombie']);
+  // parks and car parks
+  for (const blk of blocks) {
+    if (blk.use === 'park') {
+      for (let i = 0; i < 9; i++) { const x = blk.cx + rr(-12, 12), z = blk.cz + rr(-12, 12); if (Math.abs(x - blk.cx) > 2.5 && Math.abs(z - blk.cz) > 2.5) tree(x, 0, z, rr(0.9, 1.5)); }
+      sleepy(() => { put('bench', blk.cx + 4, 0, blk.cz + 2.5); put('bench', blk.cx - 4, 0, blk.cz - 2.5, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI) }); put('bin', blk.cx + 2.2, 0, blk.cz + 2.2); });
+    } else if (blk.use === 'parking') {
+      sleepy(() => { for (let i = 0; i < 8; i++) if (r01() < 0.75) put('car', blk.cx - 10.5 + i * 3, 0, blk.cz + (i % 2 ? 7 : -7), { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), i % 2 ? Math.PI : 0) }); });
+    }
+  }
+  crowd(14, 0, 2, 13); crowd(6, 0, 20, 30); crowd(2, 48, 20, 6, 0, ['zombie']);
+}
+
+// ---- MEGA WORLD: everything in one huge map
+// smooth random noise (value noise), 0..1
+function h2(i, j) { let h = Math.imul(i, 374761393) + Math.imul(j, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967295; }
+function vnoise(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+  const a = h2(i, j), b = h2(i + 1, j), c = h2(i, j + 1), d = h2(i + 1, j + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, z, o = 4) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < o; k++) { s += a * vnoise(x * f + k * 17.3, z * f - k * 9.1); f *= 2.03; a *= 0.5; } return s / (1 - Math.pow(0.5, o)); }
+function ridged(x, z) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < 5; k++) { const n = 1 - Math.abs(vnoise(x * f + k * 31.7, z * f + k * 7.7) * 2 - 1); s += a * n * n; f *= 2.1; a *= 0.5; } return s / 0.97; }
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const WORLD_HALF = 360;
+const VOLCANO = [-215, 225], ACID = [-235, 40, 34], DESERT_X = 150, MEADOW = [0, 40];
+function worldHeight(x, z) {
+  // rolling meadows and hills everywhere
+  let h = 2 + 10 * (fbm(x * 0.0055, z * 0.0055) - 0.45) + 3 * (fbm(x * 0.02, z * 0.02, 3) - 0.5);
+  // a flat-ish meadow where you start
+  const dm = Math.hypot(x - MEADOW[0], z - MEADOW[1]);
+  if (dm < 70) h = h * sstep(25, 70, dm) + 3 * (1 - sstep(25, 70, dm));
+  // the northern mountains
+  const mN = sstep(-90, -210, z);
+  if (mN > 0) h += mN * (35 + 95 * ridged(x * 0.007 + 3, z * 0.007 + 5));
+  // desert in the east: flat sand with terraced mesas
+  const mE = sstep(DESERT_X - 30, DESERT_X + 30, x) * (1 - mN);
+  if (mE > 0) {
+    const mesa = Math.max(0, fbm(x * 0.012 + 40, z * 0.012) - 0.55) * 90;
+    h = h * (1 - mE) + mE * (2.5 + Math.floor(Math.min(28, mesa) / 4) * 4);
+  }
+  // the volcano (with a crater at the top)
+  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
+  if (dv < 125) { const cone = 92 * Math.pow(1 - dv / 125, 1.35); h = Math.max(h, dv < 16 ? 74 : cone); }
+  // the acid swamp in the west: a bowl
+  const da = Math.hypot(x - ACID[0], z - ACID[1]);
+  if (da < ACID[2] + 20) h = Math.min(h, -0.4 + Math.max(0, da - ACID[2] + 6) * 0.45 + 0.4 * Math.sin(x * 0.4 + z * 0.3)); // (above the sea level, so it holds acid, not sea water)
+  // the sea in the south (a rocky headland with a sea cave sticks out)
+  const coast = 230 + 25 * Math.sin(x * 0.012);
+  const sea = sstep(coast, coast + 45, z);
+  if (sea > 0) h = h * (1 - sea) + sea * -12;
+  const dh = Math.hypot(x - 150, z - 262);
+  if (dh < 40) h = Math.max(h, 22 * Math.pow(1 - dh / 40, 0.7) - 2);
+  // the edges (except the sea) rise into hills so you can't fall off
+  const ex = Math.abs(x), ez = -z;
+  if (ex > WORLD_HALF - 30) h += (ex - (WORLD_HALF - 30)) * 1.5;
+  if (ez > WORLD_HALF - 30) h += (ez - (WORLD_HALF - 30)) * 1.5;
+  return h;
+}
+function worldColor(h, x, z) {
+  const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
+  if (dv < 125 && h > 4) return h > 70 ? 0x2e2b29 : 0x3d3a38;                 // volcano rock and ash
+  if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) return h < -1 ? 0x4a5a2a : 0x5b6b3a; // swamp
+  if (h < 1.2 && z > 150) return 0xe2cf95;                                     // beach
+  if (h < -1) return 0xc9b27a;                                                 // sea floor
+  if (h > 72) return 0xf2f6f9;                                                 // snowy peaks
+  if (h > 42) return ((Math.floor(h) % 6) < 3) ? 0x7d8288 : 0x868b91;          // mountain rock
+  if (x > DESERT_X && z < -60) return 0xeef3f6;                                // snowfield (north-east)
+  if (x > DESERT_X - 10) return h > 6 ? [0xc8743e, 0xd88a4f, 0xb5622f][Math.floor(h / 4) % 3] : 0xe2b97a; // desert + mesas
+  if (x < -150) return 0x4f8f3e;                                               // forest floor
+  return h > 14 ? 0x6e9f45 : 0x5fae4a;                                         // grass
+}
+function buildWorld() {
+  srand(101);
+  const gh = worldHeight;
+  makeTerrain({
+    W: WORLD_HALF * 2, es: 3, bedrock: -40, height: worldHeight, color: worldColor, stream: true, near: 135, spawn: [MEADOW[0], 0, MEADOW[1]],
+    caves: (stamp, fill) => {
+      // the big mountain north of the meadow: a cave mouth, a long tunnel, a huge crystal cavern
+      tunnel(stamp, [[0, gh(0, -175) + 2, -175, 3.8], [0, 20, -195, 4], [-6, 26, -220, 4.4], [-4, 30, -245, 5]]);
+      for (const [x, y, z, r] of [[0, 34, -265, 18], [12, 30, -278, 12], [-14, 38, -258, 11]]) stamp(x, y, z, r);
+      fill(-6, -268, 2, 10, 60); fill(8, -262, 1.8, 10, 60);
+      // a sealed crystal vault deeper in (dig to it)
+      stamp(0, 44, -305, 6);
+      // the pirates' sea cave in the headland
+      tunnel(stamp, [[150, -0.5, 300, 3.5], [150, 0.5, 282, 3.5], [148, 1.5, 266, 4], [146, 2.5, 256, 5]]);
+      // the desert bunker: a shaft and a room
+      tunnel(stamp, [[230, gh(230, 60) + 1, 60, 1.6], [230, -4, 60, 1.6]]);
+      stamp(232, -7, 63, 5);
+    },
+  });
+  water1(-1, 1100);
+  // pools: the acid swamp and the volcano's lava
+  addPool('acid', ACID[0], ACID[1], ACID[2] + 4, 1.2, mapGroup);
+  addPool('lava', VOLCANO[0], VOLCANO[1], 15.5, 74.6, mapGroup);
+  const F = (x, y, z) => (G.floorAt ? G.floorAt(x, y, z) : y);
+  // ---- forests (instanced)
+  const trees = [], pines = [], dead = [];
+  for (let i = 0; i < 2600 && trees.length < 900; i++) {
+    const x = rr(-340, 340), z = rr(-340, 220), y = gh(x, z);
+    if (y < 1 || y > 42) continue;
+    if (Math.hypot(x - MEADOW[0], z - MEADOW[1]) < 60 || Math.hypot(x - VOLCANO[0], z - VOLCANO[1]) < 125) continue;
+    if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) { if (dead.length < 40) dead.push([x, y - 0.2, z, rr(0.8, 1.3)]); continue; }
+    if (x > DESERT_X - 10 && z > -60) continue;                 // desert: no trees
+    const dense = x < -150 ? 1 : 0.28;
+    if (Math.random() > dense) continue;
+    (x > DESERT_X && z < -60 ? pines : trees).push([x, y - 0.2, z, rr(0.8, 1.6)]);
+  }
+  forest(trees); forest(pines, [0xeef4f8, 0xdfe9f0]);
+  forest(dead, [0x4a3b2a]);
+  for (let i = 0; i < 70; i++) { const x = rr(-340, 340), z = rr(-340, 260), y = gh(x, z); if (y > 0) rock(x, y, z, rr(0.8, 2.6)); }
+  // ---- crystals in the mountain cavern and the vault
+  for (let i = 0; i < 18; i++) { const a = rr(0, 6.28), r = rr(0, 15); crystals(Math.cos(a) * r, 30, -265 + Math.sin(a) * r, rr(0.9, 2.2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
+  crystals(0, 42, -305, 2.4, 0xffd86b);
+  // ---- the sky island above the meadow, and the hidden launch pad in the forest that gets you there
+  const SI = [-40, -10], SY = gh(SI[0], SI[1]) + 78;
+  sbox(22, 2, 22, SI[0], SY, SI[1], 0x5fae4a, 'grass', null, 4);
+  sbox(14, 3, 14, SI[0], SY - 2.4, SI[1], 0x7d6a54);
+  sbox(7, 3, 7, SI[0], SY - 5, SI[1], 0x6b5a46);
+  tree(SI[0] + 6, SY + 1, SI[1] + 5, 1.3); tree(SI[0] - 7, SY + 1, SI[1] - 4, 1.1);
+  pad(SI[0] + 9, gh(SI[0] + 9, SI[1] + 13), SI[1] + 13, new THREE.Vector3(-1.8, 41.5, -2.6), 0xb98cff);
+  // ---- the village where you start
+  sleepy(() => {
+    for (const [x, z, r] of [[-18, 20, 0.2], [18, 22, -0.3], [-22, 58, 3.1], [20, 60, 2.9]]) buildPrefab('house', new THREE.Vector3(x, gh(x, z), z), r, false);
+    for (let i = 0; i < 6; i++) put('lamp', -15 + i * 6, gh(-15 + i * 6, 40) , 34);
+    for (const [x, z] of [[-6, 46], [6, 46]]) put('bench', x, gh(x, z), z);
+    for (const [x, z] of [[-30, 30], [28, 44], [0, 70]]) put('car', x, gh(x, z) + 0.2, z);
+    pallets(-8, gh(-8, 10) + 0.1, 10, 3);
+    put('tnt_mega', 40, gh(40, 10) + 0.3, 10);
+    // the beach and its pier
+    for (let i = 0; i < 6; i++) put('beachball', rr(-60, 60), gh(0, 236) + 1, rr(236, 246));
+    // the desert: a fort, cacti, barrels, a minefield
+    buildPrefab('fort', new THREE.Vector3(240, gh(240, 0), 0), 0, false);
+    for (let i = 0; i < 26; i++) { const x = rr(DESERT_X + 20, 330), z = rr(-50, 200), y = gh(x, z); if (y > 1 && y < 4) put('cactus', x, y, z); }
+    for (let i = 0; i < 10; i++) { const x = rr(200, 260), z = rr(100, 140); put(i % 3 ? 'barrel' : 'drum', x, gh(x, z), z); }
+    // the bunker under the desert: the stash
+    for (let i = 0; i < 4; i++) put('tnt', 230 + i, F(232, -6, 63) + 0.2, 63);
+    put('nuke', 234, F(234, -6, 61) + 0.3, 61);
+    for (let i = 0; i < 4; i++) put('gold', 231 + i * 0.7, F(231, -6, 66) + 0.2, 66);
+    // pirates' treasure in the sea cave, gold in the vault
+    for (let i = 0; i < 5; i++) put('gold', 146 + rr(-2, 2), F(146, 3, 256) + 0.2, 256 + rr(-2, 2));
+    for (let i = 0; i < 6; i++) put('gold', rr(-3, 3), F(0, 44, -305) + 0.2, -305 + rr(-3, 3));
+    for (let i = 0; i < 3; i++) put('gold', SI[0] + rr(-3, 3), SY + 1.3, SI[1] + rr(-3, 3));
+    // snowfield: snowmen and an igloo
+    for (let i = 0; i < 5; i++) { const x = rr(190, 300), z = rr(-160, -80), y = gh(x, z); buildPrefab('snowman', new THREE.Vector3(x, y, z), rr(0, 6), false); }
+    buildPrefab('igloo', new THREE.Vector3(240, gh(240, -120), -120), 0, false);
+    // boulders at the top of a hill, for rolling
+    for (let i = 0; i < 6; i++) put('boulder', -80 + i * 2.6, gh(-80, -60) + 1, -60);
+  });
+  // the pier
+  for (let i = 0; i < 9; i++) sbox(3, 0.3, 4, 0, 0.2, 248 + i * 4, 0x8a6a46, 'plank');
+  for (let i = 0; i < 9; i++) for (const s of [-1.3, 1.3]) sbox(0.3, 4, 0.3, s, -1.6, 248 + i * 4, 0x6e4626);
+  // bunker hatch ring
+  scyl(2.4, 0.4, 230, gh(230, 60) + 0.2, 60, 0x5a6066);
+  // ---- people
+  crowd(10, 0, 40, 18, 3.1); crowd(4, 0, 238, 20, gh(0, 238) + 0.1); crowd(3, 240, 0, 10, gh(240, 0) + 0.1); crowd(2, 230, -110, 8, gh(230, -110) + 0.1);
+  crowd(2, -235, 80, 6, gh(-235, 80) + 0.1, ['zombie']);
+}
+
+// ---- Caves: a mountain full of them
+function cavesHeight(x, z) {
+  const e = Math.max(Math.abs(x), Math.abs(z));
+  const top = 36 + 1.5 * Math.sin(x * 0.07) * Math.cos(z * 0.06) + Math.sin(x * 0.19 + z * 0.13);
+  if (e < 84) return top;
+  if (e < 98) return 1 + (top - 1) * Math.pow((98 - e) / 14, 0.6); // cliffs all round
+  return 1 + 0.4 * Math.sin(x * 0.2) * Math.sin(z * 0.17);
+}
+function buildCaves() {
+  srand(77);
+  makeTerrain({
+    W: 220, es: 3, bedrock: -40, height: cavesHeight,
+    color: (h) => (h > 30 ? 0x4f7a3a : h > 3 ? 0x6e7076 : 0x5fae4a),
+    // rock in bands of colour, deeper = darker
+    under: (d, topc) => (d <= 0 ? topc : d <= 2 ? 0x5a5550 : [0x6d6f76, 0x63666e, 0x77716a, 0x5d6068][Math.floor(d / 12) % 4]),
+    caves: (stamp, fill) => {
+      // the way in, from the valley in the south
+      tunnel(stamp, [[0, 3.6, 100, 4], [0, 4, 84, 4.4], [2, 4.5, 66, 4.6], [1, 6, 48, 5]]);
+      // the Great Hall, held up by four pillars
+      for (const [x, y, z, r] of [[0, 10, 30, 16], [-10, 8, 22, 12], [10, 9, 38, 12], [0, 14, 28, 13], [-6, 6, 40, 9]]) stamp(x, y, z, r);
+      for (const [x, z] of [[-8, 24], [8, 24], [-8, 37], [8, 37]]) fill(x, z, 1.7, -8, 30);
+      // a skylight up to the top of the mountain
+      tunnel(stamp, [[6, 22, 26, 2.6], [7, 30, 23, 2.4], [8, 38, 20, 2.6]]);
+      // east: crystal grotto, and a deep pit below it with a hidden chamber
+      tunnel(stamp, [[16, 6, 30, 3.2], [30, 5, 26, 3], [42, 4, 20, 3.2]]);
+      for (const [x, y, z, r] of [[52, 4, 18, 10], [58, 6, 26, 7], [48, 7, 10, 6]]) stamp(x, y, z, r);
+      tunnel(stamp, [[55, -2, 12, 2.3], [55, -9, 11, 2.2], [55, -15, 10, 2.4]]);
+      stamp(55, -17, 8, 8); stamp(62, -16, 4, 5);
+      // west: an underground lake
+      tunnel(stamp, [[-14, 4, 26, 3.2], [-28, 2, 24, 3.2], [-40, 1, 20, 3.4]]);
+      for (const [x, y, z, r] of [[-55, 0, 18, 13], [-62, 2, 8, 9], [-48, 1, 28, 8]]) stamp(x, y, z, r);
+      // north: down to the lava chasm, with a narrow bridge over the lava
+      tunnel(stamp, [[0, 6, 14, 3.5], [1, 2, 0, 3.4], [3, -4, -14, 3.6], [2, -8, -24, 4]]);
+      for (const [x, y, z, r] of [[0, -10, -36, 14], [9, -12, -48, 10], [-9, -10, -46, 10], [0, -8, -56, 8]]) stamp(x, y, z, r);
+      for (let z = -26; z >= -60; z -= 0.5) fill(Math.sin(z * 0.15) * 2.5, z, 1.2, -40, -13.5);
+      // the old mine: narrow tunnels winding north-west
+      tunnel(stamp, [[-12, 8, 18, 1.9], [-20, 9, 5, 1.8], [-32, 9, -5, 1.8], [-30, 10, -20, 1.8], [-44, 11, -28, 1.8], [-55, 12, -35, 1.9], [-62, 12, -50, 2]]);
+      stamp(-62, 12, -52, 4.5);
+      // a sealed room nobody has found (dig to it from the mine)
+      stamp(-36, 15, -40, 4.5);
+    },
+  });
+  const F = (x, y, z) => (G.floorAt ? G.floorAt(x, y, z) : y);
+  // crystals: lots in the grotto, some everywhere else
+  for (let i = 0; i < 26; i++) { const a = rr(0, Math.PI * 2), r = rr(0, 12); crystals(52 + Math.cos(a) * r, 6, 18 + Math.sin(a) * r, rr(0.8, 2), [0x7ff7ff, 0xb98cff, 0xff8cf0][i % 3]); }
+  for (const [x, y, z, s, c] of [[0, 4, 30, 1.6, 0x7ff7ff], [-12, 4, 20, 1, 0xb98cff], [12, 4, 40, 1.2, 0x7ff7ff], [55, -16, 8, 2.2, 0xffd86b], [60, -16, 4, 1.4, 0xffd86b], [-60, 4, 6, 1.1, 0x7ff7ff], [0, -9, -30, 1.3, 0xff8a5a], [-36, 15, -40, 1.8, 0xffd86b]]) crystals(x, y, z, s, c);
+  // the lake and the lava
+  addPool('water', -56, 16, 15, -3, mapGroup);
+  addPool('lava', 0, -44, 19, -17, mapGroup);
+  // mine supports: posts and a beam every few metres
+  const mine = [[-12, 8, 18], [-20, 9, 5], [-32, 9, -5], [-30, 10, -20], [-44, 11, -28], [-55, 12, -35], [-62, 12, -50]];
+  for (let s = 0; s < mine.length - 1; s++) {
+    const [ax, ay, az] = mine[s], [bx, by, bz] = mine[s + 1];
+    const L = Math.hypot(bx - ax, bz - az), n = Math.floor(L / 5);
+    const dx = (bx - ax) / L, dz = (bz - az) / L;
+    for (let q = 1; q <= n; q++) {
+      const x = ax + (bx - ax) * q / (n + 1), z = az + (bz - az) * q / (n + 1), y = F(x, ay + (by - ay) * q / (n + 1), z);
+      const ox = -dz * 1.35, oz = dx * 1.35, rot = [0, Math.atan2(dx, dz), 0];
+      sbox(0.25, 2.4, 0.25, x + ox, y + 1.2, z + oz, 0x6e4626, 'plank', rot);
+      sbox(0.25, 2.4, 0.25, x - ox, y + 1.2, z - oz, 0x6e4626, 'plank', rot);
+      sbox(3.2, 0.25, 0.3, x, y + 2.45, z, 0x6e4626, 'plank', [0, Math.atan2(dx, dz) + Math.PI / 2, 0]);
+      if (q % 2) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.22), new THREE.MeshStandardMaterial({ color: 0xffc46b, emissive: 0xffa53a, emissiveIntensity: 2 })); deco(lamp, x, y + 2.15, z); }
+    }
+  }
+  // lanterns along the way in
+  for (let z = 92; z > 50; z -= 8) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.3), new THREE.MeshStandardMaterial({ color: 0xffc46b, emissive: 0xffa53a, emissiveIntensity: 2 })); deco(lamp, z % 16 ? 3.6 : -3.6, F(0, 4, z) + 2.6, z); }
+  // a jump pad to get back out of the deep pit, and one on the lake shore
+  pad(55, F(55, -16, 8), 8, new THREE.Vector3(0, 26, 0), 0xffb703);
+  sleepy(() => {
+    for (let i = 0; i < 5; i++) put('crate', rr(-6, 6), F(0, 6, 44), 44 + rr(-3, 3));
+    for (let i = 0; i < 4; i++) put('tnt', -30 + i * 0.9, F(-30, 9, -6) + 0.1, -6);
+    put('barrel', -44, F(-44, 11, -28) + 0.1, -27);
+    for (let i = 0; i < 6; i++) put('gold', -36 + rr(-2, 2), F(-36, 15, -40) + 0.2, -40 + rr(-2, 2));   // the secret room
+    for (let i = 0; i < 4; i++) put('gold', 55 + rr(-3, 3), F(55, -16, 8) + 0.2, 8 + rr(-3, 3));      // the deep pit
+    for (let i = 0; i < 6; i++) put('crystal', 52 + rr(-6, 6), F(52, 4, 18) + 0.6, 18 + rr(-6, 6));
+    for (let i = 0; i < 6; i++) put('boulder', rr(-10, 10), F(0, 10, 30) + 1, 30 + rr(-10, 10));
+  });
+  // up top
+  for (let i = 0; i < 30; i++) { const x = rr(-78, 78), z = rr(-78, 78); tree(x, cavesHeight(x, z) - 0.2, z, rr(0.8, 1.3)); }
+  for (let i = 0; i < 12; i++) { const x = rr(-100, 100), z = rr(98, 108); tree(x, 1, z, rr(0.8, 1.2)); }
+  crowd(6, 0, 30, 8, F(0, 6, 30) + 0.1); crowd(3, -55, 30, 4, F(-50, 2, 28) + 0.1);
 }
 
 // ---- Desert canyon with a river, mesas and cacti
@@ -549,9 +875,11 @@ function buildPlayground() {
 
 export const MAPS = [
   { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
-  { id: 'city', name: 'City', icon: '🏙️', desc: 'Concrete buildings you can bring down, cars, zombies', build: buildCity, spawn: [0, 1.2, 30], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 80, 260], killY: -30, water: -1000, walk: 90 },
+  { id: 'city', name: 'City', icon: '🏙️', desc: 'Huge towers made of blocks: climb the stairs to the roof, blow out the windows, bring them down', build: buildCity, spawn: [0, 1.2, 12], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 110, 420], killY: -30, water: -1000, walk: 118 },
+  { id: 'world', name: 'Mega World', icon: '🌍', desc: 'HUGE: mountains with a crystal cavern, snowfields, a desert with a buried bunker, a beach and sea cave, a forest with an acid swamp, a volcano, a sky island… room for everyone', build: buildWorld, spawn: [MEADOW[0], worldHeight(MEADOW[0], MEADOW[1]) + 2.5, MEADOW[1]], sky: [0x5ea6ff, 0xe3eefc], fog: [0xe3eefc, 170, 700], killY: -40, water: -1, walk: 330 },
+  { id: 'caves', name: 'Caves', icon: '🦇', desc: 'A mountain full of caves: a great hall, a crystal grotto, an underground lake, a lava chasm, old mine tunnels, a skylight… and secrets', build: buildCaves, spawn: [0, 2.4, 110], sky: [0x6d8fb8, 0xd9c7a8], fog: [0xd9c7a8, 90, 330], killY: -60, water: -1000, walk: 100 },
   { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
-  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 90, 300], killY: -30, water: -1, walk: 85 },
+  { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Big rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 100, 360], killY: -30, water: -1, walk: 110 },
   { id: 'desert', name: 'Desert Canyon', icon: '🏜️', desc: 'Mesas, a river canyon, cacti, oil drums & a minefield', build: buildDesert, spawn: [0, 4, 50], sky: [0x6aa8e8, 0xffd9a8], fog: [0xffd9a8, 90, 320], killY: -30, water: -2.5, walk: 85 },
   { id: 'snow', name: 'Snowy Peaks', icon: '❄️', desc: 'Slippery frozen lake, igloos, snowmen, a big mountain', build: buildSnow, spawn: [0, 5, 50], sky: [0x9cc3e6, 0xf2f6fa], fog: [0xf2f6fa, 70, 260], killY: -30, water: -1000, walk: 85 },
   { id: 'playground', name: 'Playground', icon: '🛝', desc: 'Swings, see-saws, a slide, trampolines & a ball pit', build: buildPlayground, spawn: [0, 1.2, 50], sky: [0x5bb1ff, 0xfff0d6], fog: [0xfff0d6, 90, 300], killY: -30, water: -1000, walk: 55 },
@@ -569,6 +897,7 @@ export function clearWorld() {
   G.projectiles.length = 0;
   for (const h of G.blackholes) G.scene.remove(h.mesh);
   G.blackholes.length = 0;
+  G.cubeSinks = [];
   G.firePatches = [];
   G.timers.length = 0;
   G.burning = 0;
@@ -583,7 +912,8 @@ export function loadMap(id) {
   mapGroup = new THREE.Group();
   G.scene.add(mapGroup);
   G.pads = [];
-  water = null; clouds = []; clearTerrain(); clearCubes(); G.groundAt = null;
+  water = null; clouds = []; clearTerrain(); clearCubes(); clearBuildings(); clearPools(); G.groundAt = null;
+  if (G.clearNukes) G.clearNukes();
   G.mapId = m.id;
   G.map = m;
   G.killY = Math.min(m.killY, DIG_DEPTH - 25); // below the deepest hole you can dig
@@ -607,16 +937,29 @@ const TIMES = {
 };
 let stars = null;
 const lampGlow = new Set();
+// tint the sky (and fog) towards a colour, k 0..1 (0 = back to normal). Used by the nuke.
+const skyBase = { top: new THREE.Color(), bot: new THREE.Color() };
+export function tintSky(color, k) {
+  if (!sky) return;
+  const c = new THREE.Color(color);
+  sky.material.uniforms.top.value.copy(skyBase.top).lerp(c, k * 0.55);
+  sky.material.uniforms.bottom.value.copy(skyBase.bot).lerp(c, k);
+  if (G.scene.fog) G.scene.fog.color.copy(sky.material.uniforms.bottom.value);
+}
+G.tintSky = tintSky;
 export function applyTime(mode) {
   const t = TIMES[mode] || TIMES.day;
   G.timeOfDay = mode;
   if (G.sun) { G.sun.intensity = t.sun; G.sun.color.set(t.sunCol); G.sunOffset = t.sunPos; }
   if (G.hemi) { G.hemi.intensity = t.hemi; G.hemi.color.set(t.hemiSky); G.hemi.groundColor.set(t.hemiGround); }
+  G.baseSun = t.sun; G.baseHemi = t.hemi;
   if (G.renderer) G.renderer.toneMappingExposure = t.exposure;
+  G.baseExposure = t.exposure;
   const m = G.map;
   if (m && sky) {
     const top = new THREE.Color(m.sky[0]), bot = new THREE.Color(m.sky[1]);
     if (t.tint) { top.lerp(new THREE.Color(t.tint[0]), t.k); bot.lerp(new THREE.Color(t.tint[1]), t.k); }
+    skyBase.top.copy(top); skyBase.bot.copy(bot);
     sky.material.uniforms.top.value.copy(top);
     sky.material.uniforms.bottom.value.copy(bot);
     if (G.scene.fog) G.scene.fog.color.copy(bot);
@@ -648,6 +991,7 @@ export function updateMap(dt) {
   if (stars && G.camera) stars.position.copy(G.camera.position);
   updateTerrain();
   updateCubes(dt);
+  updatePools(dt);
   if (water) {
     const p = water.geometry.attributes.position;
     const t = G.time;

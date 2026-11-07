@@ -99,6 +99,7 @@ function env(node, t, vol, attack, dur) {
 function noise(dst, dur, freq, q, vol, type = 'lowpass', delay = 0, attack = 0.003) {
   const t = ctx.currentTime + delay;
   const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+  if (dur > 1.3) src.loop = true; // the noise buffer is 2 s long
   const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
   const g = ctx.createGain(); env(g, t, vol, attack, dur);
   src.connect(f); f.connect(g); g.connect(dst);
@@ -210,6 +211,35 @@ export const sfx = {
   hiss(pos = null) { const o = out(pos, 40, 2); if (!o) return; noise(o, 1.8, 4000, 0.5, 0.15, 'highpass'); },
   whistle(dur = 1.2, pos = null) { const o = out(pos, 200, dur); if (!o) return; tone(o, 'sine', 1800, 500, dur, 0.06); },
   beep(pos = null) { const o = out(pos, 25, 0.1); if (!o) return; tone(o, 'square', 1500, 1500, 0.07, 0.06); },
+  // air-raid siren while a nuke is on its way (your own sound, centred)
+  siren(dur = 3) {
+    const o = out(null, 0, dur + 0.3, true); if (!o) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 640;
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.42;
+    const lg = ctx.createGain(); lg.gain.value = 230;
+    lfo.connect(lg); lg.connect(osc.frequency);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1700;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.07, t + 0.4);
+    g.gain.setValueAtTime(0.07, t + dur - 0.4); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    osc.connect(f); f.connect(g); g.connect(o);
+    osc.start(t); lfo.start(t); osc.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+  },
+  // a nuke: crack, sub-bass thump, a long roar and rolling thunder. delay = how long the sound
+  // takes to reach you; far away it's muffled down to the deep rumble.
+  nuke(pos = null, delay = 0, s = 1) {
+    const o0 = out(pos, 5000, 13 + delay, true); if (!o0) return;
+    const d = pos ? Math.hypot(pos.x - L.x, pos.y - L.y, pos.z - L.z) : 0;
+    const o = ctx.createBiquadFilter(); o.type = 'lowpass'; o.frequency.value = 260 + 16000 * Math.exp(-d / (110 * s)); o.connect(o0);
+    const v = Math.min(1, 0.55 + 0.45 * s);
+    noise(o, 0.6, 1800, 0.5, 0.8 * v, 'highpass', delay);
+    tone(o, 'sine', 64, 18, 4.5, 1.0 * v, delay, 0.01);
+    noise(o, 6.5 * s + 1, 420, 0.5, 1.0 * v, 'lowpass', delay, 0.02);
+    noise(o, 9 * s + 1.5, 120, 0.7, 0.9 * v, 'lowpass', delay + 0.3, 0.4);
+    for (let i = 0; i < 9; i++) noise(o, R(1.2, 2.6), R(140, 320), 0.8, R(0.35, 0.6) * v, 'lowpass', delay + R(0.6, 7 * s + 1), 0.15);
+    for (let i = 0; i < 10; i++) noise(o, R(0.05, 0.15), R(1200, 3500), 2, 0.2 * v, 'bandpass', delay + R(0.3, 3));
+  },
   blackhole(pos = null) { const o = out(pos, 120, 4, true); if (!o) return; tone(o, 'sine', 60, 20, 3.5, 0.45); tone(o, 'sawtooth', 200, 40, 3.5, 0.05); },
   plane() { const o = out(null, 0, 2.2); if (!o) return; noise(o, 2, 300, 0.6, 0.2, 'lowpass', 0, 0.5); tone(o, 'sawtooth', 110, 90, 2, 0.04, 0, 0.5); },
   fire(pos = null) { if (throttle('fire', 140)) return; const o = out(pos, 25, 0.3); if (!o) return; noise(o, 0.12, R(900, 2500), 3, 0.08, 'bandpass'); },

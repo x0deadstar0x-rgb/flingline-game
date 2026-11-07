@@ -174,7 +174,8 @@ export class Player {
     this.lastVy = b.velocity.y;
     if (p.y < (G.killY ?? -30)) this.respawn();
     // safety net: never stay inside the ground
-    if (G.groundAt) { const gy = G.groundAt(p.x, p.z); if (gy > -1e8 && p.y - 0.9 < gy - 0.35) { b.position.y = gy + STAND + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; } }
+    // (only if you're really inside solid ground: tunnels and caves are fine)
+    if (G.solidAt && G.solidAt(p.x, p.y - 0.9 + 0.35, p.z)) { const gy = G.floorAt(p.x, p.y - 0.9 + 0.35, p.z); b.position.y = gy + STAND + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; }
 
     // camera
     const cp = Math.cos(this.pitch);

@@ -143,7 +143,7 @@ export const CATALOG = [
   B('drum', 'Oil Drum', '🛢️', 'Boom', { shape: 'cyl', r: 0.45, h: 1.2, mat: 'tnt', tex: 'drum', explosive: { power: 0.7, impact: 14, hp: 40, fire: true } }),
   B('gas', 'Gas Canister', '🧯', 'Boom', { shape: 'cyl', r: 0.25, h: 1.0, mat: 'tnt', tex: 'gas', explosive: { power: 0.7, impact: 99, hp: 10, special: 'gas' } }),
   B('firework', 'Firework Box', '🎆', 'Boom', { shape: 'box', size: [0.4, 0.8, 0.4], mat: 'tnt', tex: 'firework', explosive: { power: 0.3, impact: 13, hp: 1, special: 'firework' } }),
-  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 10 } }),
+  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 8, nuke: 0.45 } }),
   B('mine', 'Land Mine', '⚠️', 'Boom', { shape: 'cyl', r: 0.45, h: 0.14, mat: 'metal', color: 0x4a5a3a, explosive: { power: 0.9, impact: 0.8, hp: 1, mine: true } }),
   B('c4', 'C4 Pack', '📟', 'Boom', { shape: 'box', size: [0.5, 0.2, 0.35], mat: 'tnt', color: 0xd9d1b0, explosive: { power: 1.4, impact: 40, hp: 1 } }),
   // Balls
@@ -495,7 +495,8 @@ function onCollide(e) {
 export function damage(ent, dmg, dir, at = null) {
   if (!ent || ent.dead) return;
   if (ent.unbreakable && !(ent.def && ent.def.explosive)) return;
-  if (ent.kind === 'ragpart') { ent.dummy.hurt(dmg, dir); return; }
+  if (ent.kind === 'ragpart' || ent.kind === 'dummybody') { ent.dummy.hurt(dmg, dir); return; }
+  if (!ent.def) return;
   if (ent.frozen) dmg *= 4;
   const def = ent.def;
   if (def.special === 'balloon') { popBalloon(ent); return; }
@@ -676,6 +677,8 @@ export function detonate(ent, delay = 0) {
     if (ent.dead) return;
     const pos = tv(ent.body.position);
     removeEnt(ent, true);
+    // the Nuke Barrel goes off like a small nuke (mushroom cloud, shockwave and all)
+    if (ex.nuke && G.nukeBlast) { G.nukeBlast(pos, ex.nuke * ent.scale, { craterRadius: (ex.crater || 8) * ent.scale }); return; }
     explode(pos, ex.power * ent.scale ** 1.5, { fire: ex.fire, craterRadius: ex.crater ? ex.crater * ent.scale : undefined, rim: ex.crater ? true : undefined });
   });
 }
@@ -720,6 +723,8 @@ export function explode(pos, power = 1, opts = {}) {
   if (opts.fire) for (let i = 0; i < 18; i++) FX.particle({ pos, vel: new THREE.Vector3(rand(-8, 8), rand(5, 14), rand(-8, 8)), color: 0xff7a1a, size: 0.3, life: rand(1.5, 2.5), glow: true, add: true, gravity: 14, drag: 0.2 });
   if (pos.y < G.waterAt(pos.x, pos.z) + 1.5) FX.splash(pos, 30, 1.6);
   if (G.crater && !opts.quiet && !opts.noCrater) G.crater(pos, power, opts);
+  // buildings lose blocks too (glass from further away)
+  if (G.blastBuildings && !opts.quiet) G.blastBuildings(pos, (opts.craterRadius ?? 1.9 * Math.pow(power, 0.55)) * 1.15);
   sfx.explosion(Math.min(1.5, power), pos);
   if (power >= 3.5) { FX.flashAt(pos, 400, 0xffffff); document.getElementById('whiteflash').classList.add('on'); setTimeout(() => document.getElementById('whiteflash').classList.remove('on'), 120); }
   const pd = G.player ? G.player.pos().distanceTo(pos) : 99;
@@ -854,13 +859,14 @@ function velAt(body, wp, out) {
 const ROPE_SWING_DAMP = 0.35;   // 1/s, sideways damping of a taut rope
 const BALLOON_ACC = 2.2;        // m/s² upward for a free balloon
 const BALLOON_VMAX = 3.5;       // free balloon rise speed (m/s)
-const BALLOON_VMAX_TIED = 5;    // balloons lifting something
+const BALLOON_VMAX_TIED = 7;    // balloons lifting something
 const BALLOON_DRAG = Math.exp(-0.9 / 60);
 const tiedSet = new Set();
+const ropeOf = new Map();
 export function physicsForces() {
   const g = 9.82;
-  tiedSet.clear();
-  for (const r of G.ropes) { tiedSet.add(r.a); tiedSet.add(r.b); }
+  tiedSet.clear(); ropeOf.clear();
+  for (const r of G.ropes) { tiedSet.add(r.a); tiedSet.add(r.b); ropeOf.set(r.a, r); ropeOf.set(r.b, r); }
   for (let i = G.ropes.length - 1; i >= 0; i--) {
     const r = G.ropes[i];
     r.a.pointToWorldFrame(r.la, _pa);
@@ -895,7 +901,21 @@ export function physicsForces() {
       b.velocity.scale(1 - 0.02 * sub, b.velocity);
       b.angularVelocity.scale(1 - 0.02 * sub, b.angularVelocity);
     }
-    if (e.def && e.def.special === 'balloon') {
+    const rope = e.def && e.def.special === 'balloon' && e.lift > 30 ? ropeOf.get(b) : null;
+    if (rope) {
+      // a strong (Balloon Tool) balloon pulls straight up on the thing it's tied to, at the knot.
+      // (Pulling through the string would be capped by how light the balloon is.) The balloon
+      // itself just floats at the end of its string. Lift fades out near the top speed.
+      b.applyForce(new CANNON.Vec3(0, b.mass * g * 1.6, 0));
+      b.velocity.scale(BALLOON_DRAG, b.velocity);
+      b.angularVelocity.scale(0.97, b.angularVelocity);
+      const o = rope.a === b ? rope.b : rope.a, lo = rope.a === b ? rope.lb : rope.la;
+      if (o.type === CANNON.Body.DYNAMIC) {
+        const fade = clamp((BALLOON_VMAX_TIED - o.velocity.y) / 2, 0, 1);
+        o.applyForce(new CANNON.Vec3(0, e.lift * fade, 0), o.quaternion.vmult(lo));
+        if (o.sleepState === CANNON.Body.SLEEPING) o.wakeUp();
+      }
+    } else if (e.def && e.def.special === 'balloon') {
       // a free balloon drifts up gently; a tied one pulls with its full lift.
       // Lift fades out near the top speed so nothing rockets into the sky.
       const tied = tiedSet.has(b);
@@ -932,9 +952,9 @@ export function updateEnts(dt) {
       continue;
     }
     // safety net: something that slipped into the ground is put back on top
-    if (b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC && G.groundAt) {
-      const gy = G.groundAt(b.position.x, b.position.z);
-      if (gy > -1e8 && b.position.y < gy - 0.6 && b.position.y > (G.killY ?? -100) + 5) { b.position.y = gy + 0.6; if (b.velocity.y < 0) b.velocity.y *= -0.2; }
+    if (b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC && G.solidAt && G.solidAt(b.position.x, b.position.y + 0.6, b.position.z) && b.position.y > (G.killY ?? -100) + 5) {
+      b.position.y = G.floorAt(b.position.x, b.position.y + 0.6, b.position.z) + 0.6;
+      if (b.velocity.y < 0) b.velocity.y *= -0.2;
     }
     // sleeping bodies don't move: skip syncing them (keeps idle cost near zero)
     if (e.kind !== 'ragpart' && b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC) syncEnt(e);
@@ -1203,6 +1223,7 @@ export function checkBig(kind, pos, yaw) {
 const _rrS = new CANNON.RaycastResult();
 function raycastStatic(from, to) {
   _rrS.reset();
+  if (G.ensureGround) G.ensureGround(from.x, from.z, to.x, to.z);
   G.world.raycastClosest(new CANNON.Vec3(from.x, from.y, from.z), new CANNON.Vec3(to.x, to.y, to.z), { collisionFilterMask: GROUP.STATIC, skipBackfaces: true }, _rrS);
   return _rrS.hasHit ? { point: tv(_rrS.hitPointWorld), body: _rrS.body } : null;
 }

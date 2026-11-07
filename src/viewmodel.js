@@ -239,6 +239,7 @@ const MODELS = {
     g.userData.kick = 0.5; g.userData.thrown = true;
     return g;
   },
+  superhole() { const g = MODELS.blackhole(); g.scale.setScalar(1.15); return g; },
   blackhole() {
     const g = new THREE.Group();
     pistolGrip(g, C.dark());
@@ -279,6 +280,28 @@ const MODELS = {
     for (let i = 0; i < 3; i++) bx(g, 0.012, 0.012, 0.006, C.black(), -0.02 + i * 0.02, 0.0, -0.062);
     muzzle(g, 0, 0.06, -0.12);
     g.userData.kick = 0.3;
+    return g;
+  },
+  drill() {
+    const g = new THREE.Group();
+    bx(g, 0.1, 0.11, 0.2, mat(0xffb703, { r: 0.5 }), 0, 0.03, -0.06);
+    bx(g, 0.06, 0.035, 0.12, C.black(), 0, 0.1, -0.05);
+    bx(g, 0.07, 0.05, 0.05, C.dark(), 0, 0.03, 0.06); // battery
+    pistolGrip(g, C.black());
+    const spin = new THREE.Group(); spin.position.set(0, 0.03, -0.17); g.add(spin);
+    cz(spin, 0.036, 0.036, 0.05, C.steel(), 0, 0, 0, 8);
+    cz(spin, 0.003, 0.03, 0.22, C.steel(), 0, 0, -0.13, 6);
+    for (let i = 0; i < 3; i++) tor(spin, 0.026 - i * 0.006, 0.004, C.steel(), 0, 0, -0.07 - i * 0.05);
+    muzzle(g, 0, 0.03, -0.3);
+    g.userData.spin = spin; g.userData.kick = 0.15;
+    return g;
+  },
+  blocks() {
+    const g = new THREE.Group();
+    const block = bx(g, 0.15, 0.15, 0.15, new THREE.MeshStandardMaterial({ color: 0x8c9096, roughness: 0.9, flatShading: true }), 0, 0.03, -0.1, 0.3, 0.4, 0);
+    g.userData.block = block; // takes the colour of the blocks you're placing
+    muzzle(g, 0, 0.03, -0.2);
+    g.userData.kick = 0.2;
     return g;
   },
   nuke() {
@@ -528,6 +551,7 @@ export function updateViewmodel(dt, camera, player) {
     const s = swing > 0 ? Math.sin(swing * Math.PI) : 0;
     model.rotation.set(-s * 1.4 + (1 - e) * 0.7, s * 1.1, s * 0.6);
   }
+  if (ud.block && G.blockColor !== undefined) ud.block.material.color.setHex(G.blockColor);
   if (ud.spin) ud.spin.rotation.z += dt * (5 + (G.toolSpin || 0) * 45);
   if (ud.pilot) ud.pilot.scale.setScalar(0.8 + Math.random() * 0.5);
   if (ud.glow) ud.glow.emissiveIntensity = 1.3 + Math.sin(G.time * 6) * 0.3 + kick;
