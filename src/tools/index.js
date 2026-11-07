@@ -19,7 +19,7 @@ export { updateBlackHoles, updateProjectiles, updateTornados, updateQuake, updat
 // ready-made hotbars (click one in the Tools menu to get all ten tools at once)
 export const PRESET_LOADOUTS = [
   { name: 'Starter', tools: [...DEFAULT_HOTBAR] },
-  { name: 'Demolition', tools: ['hands', 'tnt', 'rocket', 'grenade', 'sticky', 'cannon', 'meteor', 'airstrike', 'nuke', 'minigun'] },
+  { name: 'Demolition', tools: ['hands', 'tnt', 'rocket', 'c4', 'sticky', 'cannon', 'meteor', 'airstrike', 'nuke', 'minigun'] },
   { name: 'Gunslinger', tools: ['hands', 'blaster', 'shotgun', 'minigun', 'sniper', 'lightning', 'flamer', 'cannon', 'grenade', 'rocket'] },
   { name: 'Builder', tools: ['hands', 'spawner', 'weld', 'rope', 'balloon', 'thruster', 'clone', 'eraser', 'freeze', 'paint'] },
   { name: 'Mover', tools: ['hands', 'grapple', 'push', 'teleport', 'magnet', 'antigrav', 'balloon', 'thruster', 'bat', 'spawner'] },

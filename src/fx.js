@@ -1,6 +1,13 @@
 // Visual effects: pooled particles, beams, shockwaves, fireballs, flash light.
 import * as THREE from 'three';
-import { G, rand } from './core.js';
+import { G } from './core.js';
+
+// The real random numbers (taken before anything swaps Math.random for a room's seeded one):
+// effects are skipped far away, so they mustn't use up the shared random numbers on some
+// computers and not others. fxRandom is for other modules' purely visual randomness.
+const rnd = Math.random;
+export const fxRandom = rnd;
+const rand = (a, b) => a + rnd() * (b - a);
 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 const icoGeo = new THREE.IcosahedronGeometry(0.5, 0);
@@ -60,7 +67,7 @@ export function particle(o) {
   m.material.color.set(o.color ?? 0xffffff);
   m.material.opacity = o.opacity ?? 1;
   if (glow) m.material.blending = o.add ? THREE.AdditiveBlending : THREE.NormalBlending;
-  m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+  m.rotation.set(rnd() * 6, rnd() * 6, rnd() * 6);
   const p = {
     m, vel: o.vel ? o.vel.clone() : new THREE.Vector3(), life: 0, max: o.life ?? 1,
     size: o.size ?? 0.2, grow: o.grow ?? 0, grav: o.gravity ?? 9.8, drag: o.drag ?? 0.5,
@@ -229,7 +236,7 @@ export function splash(pos, n = 14, scale = 1) {
 
 export function confetti(pos, n = 50, speed = 12) {
   const cs = [0xff3b6b, 0xffd400, 0x3bd1ff, 0x7cff5a, 0xb36bff, 0xffffff, 0xff8a1c];
-  const base = cs[(Math.random() * cs.length) | 0];
+  const base = cs[(rnd() * cs.length) | 0];
   for (let i = 0; i < n; i++) {
     particle({ pos, vel: rdir(rand(speed * 0.6, speed)), color: i % 3 ? base : cs[i % cs.length], size: rand(0.1, 0.22), life: rand(1.0, 1.8), glow: true, add: true, gravity: 3, drag: 1.4 });
   }

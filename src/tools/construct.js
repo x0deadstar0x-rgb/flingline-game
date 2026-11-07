@@ -103,9 +103,12 @@ export const buildTools = [
       else spawnItem(def, p, { spawned: true, quat: def.rot ? undefined : quat });
       G.spawnLog = G.spawnLog || [];
       const made = [...G.ents].filter((e) => !beforeE.has(e));
-      if (G.settings && G.settings.spawnUnbreakable) for (const e of made) e.unbreakable = true;
-      G.spawnLog.push({ ents: made, dummies: [...G.dummies].filter((d) => !beforeD.has(d)) });
-      if (G.spawnLog.length > 50) G.spawnLog.shift();
+      // (someone else's spawn in a room isn't yours to undo, and your settings don't apply to it)
+      if (!G.netRemote) {
+        if (G.settings && G.settings.spawnUnbreakable) for (const e of made) e.unbreakable = true;
+        G.spawnLog.push({ ents: made, dummies: [...G.dummies].filter((d) => !beforeD.has(d)) });
+        if (G.spawnLog.length > 50) G.spawnLog.shift();
+      }
       FX.smoke(p, 3, 0xffffff, 0.4);
       sfx.pop();
     },

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fling Zone</title>
+<title>Detonaut</title>
 <meta name="description" content="A 3D low-poly physics sandbox: grab things with your line, throw them, blow everything up.">
 <style>
   :root {
@@ -32,16 +32,36 @@
   body.light .slot .i.ti { filter: invert(1) !important; } body.light .slot.on .i.ti { filter: none !important; }
 
   /* ---------- start screen */
-  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(5,5,5,0.92); cursor: pointer; }
-  #start .box { width: min(720px, 92vw); }
-  #start .eyebrow { font: 600 12px var(--mono); letter-spacing: 4px; color: var(--dim); }
-  #start h1 { font-size: clamp(54px, 11vw, 120px); margin: 8px 0 0; font-weight: 900; letter-spacing: -3px; line-height: 0.9; }
+  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: flex-start; padding: 0 max(4vw, 18px); overflow-y: auto; background: linear-gradient(90deg, rgba(5,5,5,0.94) 0%, rgba(5,5,5,0.82) 42%, rgba(5,5,5,0.25) 75%, rgba(5,5,5,0.05) 100%); cursor: pointer; }
+  #start .box { width: min(640px, 92vw); padding: 28px 0; }
+  #start .eyebrow { font: 600 12px var(--mono); letter-spacing: 4px; color: #ff8a3c; }
+  #start h1 { font-size: clamp(56px, 10vw, 112px); margin: 6px 0 0; font-weight: 900; letter-spacing: -3px; line-height: 0.95; text-shadow: 0 6px 40px rgba(255,120,40,0.25); }
   #start h1 span { -webkit-text-stroke: 2px #fff; color: transparent; }
-  #start .sub { color: var(--dim); margin: 18px 0 28px; font-size: 16px; max-width: 520px; }
-  #start .go { display: inline-flex; align-items: center; gap: 12px; background: #fff; color: #000; font-weight: 800; font-size: 15px; letter-spacing: 2px; padding: 16px 28px; border: 0; }
-  #start .go::after { content: "→"; font-size: 18px; }
-  #start .keys { margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); border-top: 1px solid var(--line); }
-  #start .keys div { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--dim); display: flex; gap: 10px; }
+  #start .sub { color: #c9c9c9; margin: 14px 0 22px; font-size: 16px; max-width: 540px; line-height: 1.45; }
+  #start .playrow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  #start .go { display: inline-flex; align-items: center; gap: 12px; background: #ff6a1a; color: #000; font-weight: 900; font-size: 17px; letter-spacing: 2px; padding: 16px 34px; border: 0; cursor: pointer; box-shadow: 0 8px 30px rgba(255,106,26,0.35); transition: transform .12s, box-shadow .12s; }
+  #start .go:hover { transform: translateY(-2px); box-shadow: 0 12px 36px rgba(255,106,26,0.5); }
+  #start .go::after { content: "→"; font-size: 19px; }
+  #start .mapnow { font-size: 14px; color: var(--dim); }
+  #start .mapnow b { color: #fff; }
+  #start .maps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; cursor: default; }
+  #start .maps button { background: rgba(255,255,255,0.05); color: #ddd; border: 1px solid var(--line2); padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  #start .maps button:hover { background: rgba(255,255,255,0.12); }
+  #start .maps button.on { border-color: #ff6a1a; color: #fff; background: rgba(255,106,26,0.18); }
+  #start .keys { margin-top: 22px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); border-top: 1px solid var(--line); }
+  #start .keys div { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--dim); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  #start .counts { margin-top: 12px; font: 600 11px var(--mono); letter-spacing: 2px; color: var(--dim); }
+  #start .mp { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--line2); cursor: default; background: rgba(0,0,0,0.3); }
+  #start .mp h2 { font: 700 12px var(--mono); letter-spacing: 3px; color: var(--dim); margin: 0 0 10px; }
+  #start .mprow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  #start .mp button { background: transparent; color: inherit; border: 1px solid var(--line2); padding: 9px 14px; font-weight: 700; letter-spacing: 1px; cursor: pointer; }
+  #start .mp button:hover { background: rgba(255,255,255,0.1); }
+  #start .mp button.danger { border-color: #c0392b; color: #ff6b5b; }
+  #start .mp input[type=text] { background: rgba(255,255,255,0.06); color: inherit; border: 1px solid var(--line2); padding: 9px 10px; font: 600 13px var(--mono); width: 150px; }
+  #start .mp .chk { font-size: 13px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
+  #start .mpstatus, #start .inroom { font-size: 13px; color: var(--dim); margin-top: 4px; }
+  #start .inroom b { color: #fff; font: 700 16px var(--mono); letter-spacing: 2px; }
+  body.inmenu #hud, body.inmenu #paused { display: none !important; }
   #start kbd, .help kbd { font: 600 11px var(--mono); color: #fff; border: 1px solid var(--line2); padding: 2px 6px; min-width: 22px; text-align: center; }
 
   #paused { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); cursor: pointer; font: 700 14px var(--mono); letter-spacing: 3px; }
@@ -172,10 +192,15 @@
 
   /* ---------- light mode (menus, start screen, toasts; the game view stays the same) */
   body.light { --bg: #f4f4f1; --panel: #fafaf8; --panel2: #ececea; --line: rgba(0,0,0,0.12); --line2: rgba(0,0,0,0.3); --txt: #111; --dim: #666; }
-  body.light #start { background: rgba(244,244,241,0.94); color: #111; }
+  body.light #start { background: linear-gradient(90deg, rgba(244,244,241,0.95) 0%, rgba(244,244,241,0.85) 42%, rgba(244,244,241,0.3) 75%, rgba(244,244,241,0.05) 100%); color: #111; }
+  body.light #start .sub { color: #333; }
+  body.light #start .mapnow b, body.light #start .maps button.on { color: #111; }
+  body.light #start .maps button { color: #222; }
   body.light #start h1 span, body.light #menunav .brand span { -webkit-text-stroke-color: #111; }
   body.light #start .go, body.light #menuclose { background: #111 !important; color: #fff !important; }
   body.light #start kbd, body.light .help kbd { color: #111; }
+  body.light #start .inroom b { color: #111; }
+  body.light #start .mp input[type=text] { background: rgba(0,0,0,0.05); }
   body.light #menu { background: rgba(255,255,255,0.45); }
   body.light #menu .panel { color: #111; }
   body.light .i { filter: grayscale(1) brightness(0); }
@@ -260,7 +285,7 @@
 <div id="menu">
   <div class="panel">
     <nav id="menunav">
-      <div class="brand">FLING <span>ZONE</span></div>
+      <div class="brand">DETO<span>NAUT</span></div>
       <button data-tab="tools">Tools</button>
       <button data-tab="items">Spawn</button>
       <button data-tab="maps">Maps</button>
@@ -325,18 +350,21 @@
 
 <div id="start">
   <div class="box">
-    <div class="eyebrow">PHYSICS SANDBOX</div>
-    <h1>FLING<br><span>ZONE</span></h1>
-    <div class="sub">Grab anything with your line. Throw it. Blow it up. Dig craters. Eight maps, 34 tools, 113 things to spawn.</div>
-    <button class="go">CLICK TO PLAY</button>
+    <div class="eyebrow">PHYSICS SANDBOX · BREAK EVERYTHING</div>
+    <h1>DETO<span>NAUT</span></h1>
+    <div class="sub">Grab anything with your line and throw it. Blow it up. Bring towers down, feed the volcano, open a black hole that eats the world. Alone or with friends.</div>
+    <div class="playrow"><button class="go">PLAY</button><div class="mapnow">on <b id="mapname"></b></div></div>
+    <div class="maps" id="mapchips"></div>
+    <div class="mp"><h2>PLAY TOGETHER</h2><div id="mproom"></div></div>
     <div class="keys">
-      <div><kbd>WASD</kbd> move</div>
+      <div><kbd>WASD</kbd> move · <kbd>SPACE</kbd> jump</div>
       <div><kbd>F</kbd> grab · again: throw</div>
-      <div><kbd>CLICK</kbd> drop / use tool</div>
-      <div><kbd>Z X</kbd> line length</div>
-      <div><kbd>1-0</kbd> tools</div>
-      <div><kbd>E</kbd> menu · controls</div>
+      <div><kbd>CLICK</kbd> use tool / drop</div>
+      <div><kbd>1-0</kbd> tools · <kbd>E</kbd> menu</div>
+      <div><kbd>B</kbd> set off C4 · <kbd>L</kbd> flashlight</div>
+      <div><kbd>M</kbd> back to this screen</div>
     </div>
+    <div class="counts" id="counts"></div>
   </div>
 </div>
 

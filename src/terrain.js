@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, GROUP, clamp, addShapesFast } from './core.js';
+import { fxRandom } from './fx.js';
 
 export const V = 0.5;   // block size (m)
 const CH = 32;          // chunk size in columns (16 m) for drawing
@@ -64,7 +65,16 @@ export function createTerrain(opts, group, bodies) {
   return T;
 }
 
-export function clearTerrain() { T = null; G.terrain = null; G.waterAt = noWater; G.floorAt = null; G.solidAt = null; sgrid.clear(); }
+export function clearTerrain() {
+  if (T) {
+    for (const m of T.chunks) if (m) m.geometry.dispose();
+    if (T.farMeshes) for (const m of T.farMeshes) m.geometry.dispose();
+    if (T.farMat) T.farMat.dispose();
+    T.mat.dispose();
+    if (T.water && T.water.tex) T.water.tex.dispose();
+  }
+  T = null; G.terrain = null; G.waterAt = noWater; G.floorAt = null; G.solidAt = null; sgrid.clear();
+}
 
 // ------------------------------------------------------------- ground physics, on demand
 // A patch of ground only gets its physics when something needs it: a moving thing near it or a
@@ -142,35 +152,39 @@ export function waterAt(x, z) {
   if (i < 0 || j < 0 || i >= T.N || j >= T.N) return T.water.seaOutside ? Math.max(pl, T.water.level) : pl;
   return T.water.wet[i * T.N + j] ? Math.max(pl, T.water.level) : pl;
 }
-// after digging: water flows into dug columns that touch water and are below the water level
-function flood(ia, ib, ja, jb) {
+// after digging: water flows into dug columns that touch water and are below the water level,
+function floodCols(cols) {
   const W = T.water;
   if (!W) return;
   const { N, lv } = T;
   const low = (k) => lv[k] * V < W.level;
   const q = [];
-  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
-    const k = i * N + j;
+  for (const k of cols) {
     if (W.wet[k] || !low(k)) continue;
+    const i = Math.floor(k / N), j = k % N;
     const touches = (i === 0 || j === 0 || i === N - 1 || j === N - 1) ? W.seaOutside
       : (W.wet[k - N] || W.wet[k + N] || W.wet[k - 1] || W.wet[k + 1]);
     if (touches) { W.wet[k] = 1; q.push(k); }
   }
-  let changed = q.length > 0;
+  if (!q.length) return;
   while (q.length) {
     const k = q.pop();
     const i = Math.floor(k / N), j = k % N;
     W.mask[j * N + i] = 255;
-    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const ni = i + di, nj = j + dj;
-      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
-      const nk = ni * N + nj;
-      if (!W.wet[nk] && low(nk)) { W.wet[nk] = 1; q.push(nk); }
-    }
+    if (i > 0 && !W.wet[k - N] && low(k - N)) { W.wet[k - N] = 1; q.push(k - N); }
+    if (i < N - 1 && !W.wet[k + N] && low(k + N)) { W.wet[k + N] = 1; q.push(k + N); }
+    if (j > 0 && !W.wet[k - 1] && low(k - 1)) { W.wet[k - 1] = 1; q.push(k - 1); }
+    if (j < N - 1 && !W.wet[k + 1] && low(k + 1)) { W.wet[k + 1] = 1; q.push(k + 1); }
   }
-  if (changed) W.tex.needsUpdate = true;
+  W.tex.needsUpdate = true;
 }
-
+// the highest ground on the map (for the super black hole: above this there's nothing to eat)
+export function groundTop() {
+  if (!T) return 0;
+  if (T.topMax === undefined) { let m = -1e9; for (let k = 0; k < T.lv.length; k++) if (T.lv[k] > m) m = T.lv[k]; T.topMax = m * V; }
+  return T.topMax;
+}
+export function groundBottom() { return T ? T.bed * V : -40; }
 // height of the ground (top of the block column) at x, z
 export function terrainHeight(x, z) {
   if (!T) return -1e9;
@@ -201,6 +215,37 @@ export function floorAt(x, y, z) {
   for (let q = 0; q < v.length; q += 2) if (l < v[q + 1]) return v[q] * V;
   return top * V;
 }
+// For liquids (column index k): the top of the ground in column k at or below height y (m), a
+// cave floor if y is inside a cave; +Infinity if the column is solid at y.
+export function colFloor(k, y) {
+  const top = T.lv[k], l = y / V;
+  if (l >= top) return top * V;
+  const v = T.voids.get(k);
+  if (v) for (let q = 0; q < v.length; q += 2) if (l >= v[q] && l < v[q + 1]) return v[q] * V;
+  return Infinity;
+}
+// Fill blocks into columns (liquid turning to rock): list of [k, a, b, colour] in levels
+export function addColumnBlocks(list) {
+  if (!T || !list.length) return;
+  const { N } = T;
+  const patches = new Set();
+  let ia = 1e9, ib = -1, ja = 1e9, jb = -1;
+  for (const [k, a, b, color] of list) {
+    if (b <= a) continue;
+    fillLevels(k, a, b);
+    for (let l = a; l < b; l++) T.paint.set(k * 65536 + l + 1 + 32768, color);
+    if (T.water) T.water.wet[k] = T.water.wet[k] && colFloor(k, T.water.level - 0.01) !== Infinity ? 1 : 0;
+    const i = Math.floor(k / N), j = k % N;
+    markDirty(i, j);
+    if (i < ia) ia = i; if (i > ib) ib = i; if (j < ja) ja = j; if (j > jb) jb = j;
+    for (const [di, dj] of [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const ci = Math.floor((i + di) / PC), cj = Math.floor((j + dj) / PC);
+      if (ci >= 0 && cj >= 0 && ci < T.pnc && cj < T.pnc) patches.add(ci * T.pnc + cj);
+    }
+  }
+  for (const idx of patches) if (T.pchunks[idx]) buildPhysics(Math.floor(idx / T.pnc), idx % T.pnc);
+  if (G.onGroundChange && ib >= 0) G.onGroundChange(ia, ib, ja, jb, true);
+}
 // is this point deep inside the ground?
 export function belowGround(x, y, z, margin = 0.3) { return solidAt(x, y + margin, z) && y > T.bed * V + 1; }
 
@@ -229,7 +274,15 @@ function quad(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, nx, ny, nz, col) {
   pushV(bx, by, bz, nx, ny, nz, r, g, b); pushV(cx, cy, cz, nx, ny, nz, r, g, b); pushV(dx, dy, dz, nx, ny, nz, r, g, b);
 }
 function shade(hex, f) { _c2.setHex(hex); _c2.r *= f; _c2.g *= f; _c2.b *= f; return _c2.getHex(); }
-const SCORCH = 0x3a2a1e, CRATER = 0x4a3524;
+const SCORCH = 0x3a2a1e, CRATER = 0x4a3524, ASH = 0x8b8780, ASH2 = 0x6f6b66;
+// how a burn mark changes a top colour: 1 scorched, 2 crater floor, 3 volcanic ash
+function burnTint(c, bn, i, j) {
+  if (!bn) return c;
+  _c.setHex(c);
+  if (bn === 3) { _c2.setHex(hash(i * 3 + 7, j * 5 + 1) < 0.5 ? ASH : ASH2); _c.lerp(_c2, 0.86); }
+  else { _c2.setHex(bn === 2 ? CRATER : SCORCH); _c.lerp(_c2, bn === 2 ? 0.55 : 0.4); }
+  return _c.getHex();
+}
 function topColor(k, i, j) {
   let c = T.topc[k];
   // the top block of a carved column shows what's at that depth (dirt / stone); placed blocks
@@ -238,9 +291,28 @@ function topColor(k, i, j) {
   // gentle patchy variation (per 2 m patch so flat areas still merge into big quads)
   const n = hash(i >> 2, j >> 2);
   c = shade(c, 0.94 + n * 0.1);
-  const bn = T.burn[k];
-  if (bn) { _c.setHex(c); _c2.setHex(bn === 2 ? CRATER : SCORCH); _c.lerp(_c2, bn === 2 ? 0.55 : 0.4); c = _c.getHex(); }
-  return c;
+  return burnTint(c, T.burn[k], i, j);
+}
+// mark the ground in a ring around (cx, cz) (from r0 to r1 m) with a burn value (3 = ash), more
+// patchy towards the outside (thin = how much is covered at r1, 0..1). Returns columns changed.
+export function paintBurn(cx, cz, r0, r1, value, thin = 0.3, rMax = r1) {
+  if (!T) return 0;
+  const { N, x0, z0, burn } = T;
+  const ia = Math.max(0, Math.floor((cx - r1 - x0) / V)), ib = Math.min(N - 1, Math.ceil((cx + r1 - x0) / V));
+  const ja = Math.max(0, Math.floor((z0 - cz - r1) / V)), jb = Math.min(N - 1, Math.ceil((z0 - cz + r1) / V));
+  let n = 0;
+  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
+    const k = i * N + j;
+    if (burn[k] === value) continue;
+    const x = x0 + (i + 0.5) * V, z = z0 - (j + 0.5) * V, d = Math.hypot(x - cx, z - cz);
+    if (d < r0 || d >= r1) continue;
+    // patchy edge: 2 m blotches, fewer further out
+    const keep = 1 - (1 - thin) * clamp(d / rMax, 0, 1) ** 1.5;
+    if (hash((i >> 2) + 913, (j >> 2) + 77) > keep) continue;
+    burn[k] = value; n++;
+    markDirty(i, j);
+  }
+  return n;
 }
 // side wall of column k from level lo (exclusive bottom) up to hi, facing (nx, nz)
 // how dark a cave is at this depth under the ground above it (no light gets that far in)
@@ -271,6 +343,12 @@ function blockColor(k, l) {
   return 0x4a4c55; // deep bedrock
 }
 
+// (two columns with blocks you placed: do they have the same colours top to bottom?)
+function paintedSame(k1, k2) {
+  const l = T.lv[k1];
+  for (let q = Math.min(T.orig[k1], l) - 1; q <= l; q++) if (blockColor(k1, q) !== blockColor(k2, q)) return false;
+  return true;
+}
 // ------------------------------------------------------------- caves (air inside columns)
 // solid levels of column k inside [a, b) (b <= top)
 function solidIn(k, a, b) {
@@ -423,7 +501,7 @@ function buildChunk(ci, cj) {
   const { orig, topc } = T;
   const hasV = (i, j) => voids.size > 0 && i >= 0 && j >= 0 && i < N && j < N && voids.has(i * N + j);
   const nlv = (i, j) => (i < 0 || j < 0 || i >= N || j >= N ? edge : lv[i * N + j]);
-  const same = (k1, k2) => lv[k1] === lv[k2] && orig[k1] === orig[k2] && topc[k1] === topc[k2];
+  const same = (k1, k2) => lv[k1] === lv[k2] && orig[k1] === orig[k2] && topc[k1] === topc[k2] && (!T.paint.size || paintedSame(k1, k2));
   // walls facing +x / -x: runs along j
   for (const sx of [1, -1]) {
     for (let i = i0; i < i1; i++) {
@@ -548,12 +626,15 @@ function buildFar() {
     for (let i = a * FARC; i < Math.min(N, (a + 1) * FARC); i++) for (let j = b * FARC; j < Math.min(N, (b + 1) * FARC); j++) mn = Math.min(mn, lv[i * N + j]);
     fh[a * M + b] = mn - 1;
     const ci = Math.min(N - 1, a * FARC + (FARC >> 1)), cj = Math.min(N - 1, b * FARC + (FARC >> 1));
-    fc[a * M + b] = topc[ci * N + cj];
+    fc[a * M + b] = burnTint(topc[ci * N + cj], T.burn[ci * N + cj], ci, cj);
   }
-  const U = { value: new THREE.Vector3(0, 0, 0) };
+  if (T.farMeshes) for (const m of T.farMeshes) { m.geometry.dispose(); m.removeFromParent(); }
+  T.farMeshes = [];
+  const U = T.farU || { value: new THREE.Vector3(0, 0, 0) };
   T.farU = U;
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
-  mat.onBeforeCompile = (sh) => {
+  const mat = T.farMat || new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
+  T.farMat = mat;
+  if (!mat.onBeforeCompile || !mat.userData.near) mat.userData.near = true, mat.onBeforeCompile = (sh) => {
     sh.uniforms.uNear = U;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ;\nuniform vec3 uNear;').replace('void main() {', 'void main() {\n  if (distance(vWXZ, uNear.xy) < uNear.z) discard;');
@@ -582,8 +663,12 @@ function buildFar() {
     geo.computeBoundingSphere();
     const m = new THREE.Mesh(geo, mat);
     T.group.add(m);
+    T.farMeshes.push(m);
   }
 }
+// redraw the far version (after big changes, e.g. a volcano's ash)
+export function refreshFar() { if (T && T.stream) buildFar(); }
+G.refreshFar = refreshFar;
 // make a round column of ground solid from y0 to y1 (pillars in caves)
 function fillColumn(x, z, r, y0, y1) {
   const { N, x0, z0 } = T;
@@ -624,7 +709,7 @@ function buildPhysics(ci, cj) {
   }
   const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
   body.isTerrain = true;
-  if (rects.length <= RMAX || caveCols.length) {
+  if (true || rects.length <= RMAX || caveCols.length) { // (boxes only: exact, and what everything else assumes)
     body.position.set(x0 + i0 * V, 0, z0 - j0 * V);
     const shapes = [], offs = [];
     // (a neighbour's cave counts as low ground: the wall next to it must go down that far)
@@ -760,8 +845,13 @@ export function carveTerrain(pos, R, opts = {}) {
   if (!sphere && pos.y - g > R * 0.75) return null;
   const { N, lv, x0, z0, burn } = T;
   const cy = sphere ? pos.y : Math.min(pos.y, g + R * 0.35) - (opts.sink ?? 0.15);
-  const ia = Math.max(0, Math.floor((pos.x - R * 1.3 - x0) / V)), ib = Math.min(N - 1, Math.ceil((pos.x + R * 1.3 - x0) / V));
-  const ja = Math.max(0, Math.floor((z0 - pos.z - R * 1.3) / V)), jb = Math.min(N - 1, Math.ceil((z0 - pos.z + R * 1.3) / V));
+  // (a huge ball can be eaten a slice of rows at a time, skipping the inside that's already gone)
+  const reach = sphere ? R + Math.min(0.1 * R, 3) : R * 1.3;
+  let ia = Math.max(0, Math.floor((pos.x - reach - x0) / V)), ib = Math.min(N - 1, Math.ceil((pos.x + reach - x0) / V));
+  const ja = Math.max(0, Math.floor((z0 - pos.z - reach) / V)), jb = Math.min(N - 1, Math.ceil((z0 - pos.z + reach) / V));
+  if (opts.slice) { const [sl, S] = opts.slice, n = ib - ia + 1; ib = ia + Math.floor(n * (sl + 1) / S) - 1; ia = ia + Math.floor(n * sl / S); }
+  const inner2 = opts.inner > 0 ? opts.inner * opts.inner : -1;
+  const wetCols = [];
   let removed = 0;
   const sample = [];
   let minL = Infinity;
@@ -776,11 +866,19 @@ export function carveTerrain(pos, R, opts = {}) {
     if (jj === 0 && cj > 0) changed.add(ci * T.pnc + cj - 1);
     if (jj === PC - 1 && cj + 1 < T.pnc) changed.add(ci * T.pnc + cj + 1);
   };
-  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
+  for (let i = ia; i <= ib; i++) {
+    const dx = x0 + (i + 0.5) * V - pos.x;
+    if (dx * dx > reach * reach) continue;
+    const w = Math.sqrt(reach * reach - dx * dx);
+    const jlo = Math.max(ja, Math.floor((z0 - pos.z - w) / V)), jhi = Math.min(jb, Math.ceil((z0 - pos.z + w) / V));
+    let skipA = 1e9, skipB = -1e9;
+    if (inner2 > dx * dx) { const wi = Math.sqrt(inner2 - dx * dx); skipA = Math.ceil((z0 - pos.z - wi) / V); skipB = Math.floor((z0 - pos.z + wi) / V) - 1; }
+  for (let j = jlo; j <= jhi; j++) {
+    if (j >= skipA && j <= skipB) { j = skipB; continue; }
     const k = i * N + j;
     const x = x0 + (i + 0.5) * V, z = z0 - (j + 0.5) * V;
     const d = Math.hypot(x - pos.x, z - pos.z);
-    const Rc = R * (sphere ? 0.9 + 0.2 * hash(i * 7 + 3, j * 13 + 5) : 0.82 + 0.3 * hash(i * 7 + 3, j * 13 + 5)); // ragged blocky edge
+    const Rc = sphere ? R + (hash(i * 7 + 3, j * 13 + 5) - 0.5) * Math.min(0.2 * R, 5) : R * (0.82 + 0.3 * hash(i * 7 + 3, j * 13 + 5)); // ragged blocky edge
     if (d > Rc * 1.25) continue;
     if (d > Rc) {
       if (sphere) continue;
@@ -794,20 +892,23 @@ export function carveTerrain(pos, R, opts = {}) {
     const l = lv[k];
     let a, b;
     if (sphere) { a = Math.floor((cy - hs) / V + 0.5); b = Math.ceil((cy + hs) / V - 0.5); }
-    else { a = Math.max(T.bed, Math.floor((cy - hs * (opts.flat ?? 0.85)) / V)); b = l + 1; burn[k] = d < Rc * 0.75 ? 2 : Math.max(burn[k], 1); }
+    else { a = Math.max(T.bed, Math.floor((cy - hs * (opts.flat ?? 0.85)) / V)); b = Math.min(l + 1, Math.ceil((cy + hs) / V)); burn[k] = d < Rc * 0.75 ? 2 : Math.max(burn[k], 1); }
     if (sample.length < 80) for (let q = Math.min(b, l); q > a && sample.length < 80; q--) sample.push(blockColor(k, q));
     const rem = addVoid(k, a, b);
     if (rem > 0) {
       removed += rem;
       if (lv[k] < minL) minL = lv[k];
       touch(i, j);
+      if (T.water && T.water.level > lv[k] * V) wetCols.push(k);
     }
     if (rem > 0 || !sphere) markDirty(i, j);
+  }
   }
   // the ground's physics follows the new blocks immediately (only the patches that changed)
   for (const idx of changed) if (T.pchunks[idx]) buildPhysics(Math.floor(idx / T.pnc), idx % T.pnc);
   if (minL < Infinity) {
-    flood(Math.max(0, ia - 1), Math.min(N - 1, ib + 1), Math.max(0, ja - 1), Math.min(N - 1, jb + 1));
+    if (wetCols.length) floodCols(wetCols);
+    if (G.onGroundChange) G.onGroundChange(ia, ib, ja, jb);
   }
   // scorched ground further out (only the colour changes, so no physics rebuild)
   if (opts.scorch > R * 1.25) {
@@ -833,24 +934,25 @@ export function placeCube(x, y, z, n = 2, color = 0x8a7a64) {
   if (!T) return false;
   const { N, x0, z0 } = T;
   const i0 = Math.floor(Math.floor((x - x0) / V) / n) * n, j0 = Math.floor(Math.floor((z0 - z) / V) / n) * n;
-  const l0 = Math.floor(Math.floor(y / V) / n) * n;
+  const l0 = Math.floor(y / V);
   if (i0 < 0 || j0 < 0 || i0 + n > N || j0 + n > N) return false;
   for (let i = i0; i < i0 + n; i++) for (let j = j0; j < j0 + n; j++) {
     const k = i * N + j;
     fillLevels(k, l0, l0 + n);
     for (let l = l0; l < l0 + n; l++) T.paint.set(k * 65536 + l + 1 + 32768, color); // block l occupies l..l+1: its top is l+1
-    if (T.water) T.water.wet[k] = T.water.wet[k] && T.lv[k] * V < T.water.level ? 1 : 0;
+    if (T.water) T.water.wet[k] = T.water.wet[k] && colFloor(k, T.water.level - 0.01) !== Infinity ? 1 : 0;
     markDirty(i, j);
   }
   const pa = Math.max(0, Math.floor((i0 - 1) / PC)), pb = Math.min(T.pnc - 1, Math.floor((i0 + n) / PC));
   const qa = Math.max(0, Math.floor((j0 - 1) / PC)), qb = Math.min(T.pnc - 1, Math.floor((j0 + n) / PC));
   for (let ci = pa; ci <= pb; ci++) for (let cj = qa; cj <= qb; cj++) if (T.pchunks[ci * T.pnc + cj]) buildPhysics(ci, cj);
+  if (G.onGroundChange) G.onGroundChange(i0, i0 + n - 1, j0, j0 + n - 1, true);
   return true;
 }
 // centre of the cube placeCube would fill
 export function cubeCenter(x, y, z, n = 2) {
   if (!T) return null;
-  const i0 = Math.floor(Math.floor((x - T.x0) / V) / n) * n, j0 = Math.floor(Math.floor((T.z0 - z) / V) / n) * n, l0 = Math.floor(Math.floor(y / V) / n) * n;
+  const i0 = Math.floor(Math.floor((x - T.x0) / V) / n) * n, j0 = Math.floor(Math.floor((T.z0 - z) / V) / n) * n, l0 = Math.floor(y / V);
   return new THREE.Vector3(T.x0 + (i0 + n / 2) * V, (l0 + n / 2) * V, T.z0 - (j0 + n / 2) * V);
 }
 function markDirty(i, j) {
@@ -887,16 +989,16 @@ export function cubeBurst(pos, n, colors, speed = 9, size = V * 0.9) {
   ensureCubes();
   for (let q = 0; q < n; q++) {
     const i = cubeIdx = (cubeIdx + 1) % MAXC;
-    const a = Math.random() * Math.PI * 2, up = 0.45 + Math.random() * 0.8, sp = speed * (0.35 + Math.random() * 0.75);
+    const a = fxRandom() * Math.PI * 2, up = 0.45 + fxRandom() * 0.8, sp = speed * (0.35 + fxRandom() * 0.75);
     const c = {
-      p: new THREE.Vector3(pos.x + (Math.random() - 0.5) * 1.2, pos.y + 0.3 + Math.random() * 0.6, pos.z + (Math.random() - 0.5) * 1.2),
+      p: new THREE.Vector3(pos.x + (fxRandom() - 0.5) * 1.2, pos.y + 0.3 + fxRandom() * 0.6, pos.z + (fxRandom() - 0.5) * 1.2),
       v: new THREE.Vector3(Math.cos(a) * sp * (1 - up * 0.5), sp * up + 2, Math.sin(a) * sp * (1 - up * 0.5)),
-      r: new THREE.Vector3(Math.random() * 6, Math.random() * 6, Math.random() * 6),
-      w: new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
-      s: size * (0.55 + Math.random() * 0.6), life: 0, max: 3.5 + Math.random() * 3, rest: false,
+      r: new THREE.Vector3(fxRandom() * 6, fxRandom() * 6, fxRandom() * 6),
+      w: new THREE.Vector3((fxRandom() - 0.5) * 14, (fxRandom() - 0.5) * 14, (fxRandom() - 0.5) * 14),
+      s: size * (0.55 + fxRandom() * 0.6), life: 0, max: 3.5 + fxRandom() * 3, rest: false,
     };
     cubeList[i] = c;
-    cubes.setColorAt(i, _c.setHex(colors[(Math.random() * colors.length) | 0] ?? 0x6b4f35));
+    cubes.setColorAt(i, _c.setHex(colors[(fxRandom() * colors.length) | 0] ?? 0x6b4f35));
   }
   if (cubes.instanceColor) cubes.instanceColor.needsUpdate = true;
 }
@@ -907,9 +1009,9 @@ export function spawnCube(pos, vel, color, size = V * 0.9, life = 4) {
   const i = cubeIdx = (cubeIdx + 1) % MAXC;
   cubeList[i] = {
     p: pos.clone(), v: vel.clone(),
-    r: new THREE.Vector3(Math.random() * 6, Math.random() * 6, Math.random() * 6),
-    w: new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8),
-    s: size, life: 0, max: life + Math.random() * 2, rest: false,
+    r: new THREE.Vector3(fxRandom() * 6, fxRandom() * 6, fxRandom() * 6),
+    w: new THREE.Vector3((fxRandom() - 0.5) * 8, (fxRandom() - 0.5) * 8, (fxRandom() - 0.5) * 8),
+    s: size, life: 0, max: life + fxRandom() * 2, rest: false,
   };
   cubes.setColorAt(i, _c.setHex(color));
   if (cubes.instanceColor) cubes.instanceColor.needsUpdate = true;
@@ -942,7 +1044,7 @@ export function updateCubes(dt) {
       c.r.addScaledVector(c.w, dt);
       // the floor under it (ground or a building floor), looked up again only when it has moved
       if (c.fx === undefined || Math.abs(c.p.x - c.fx) > 0.3 || Math.abs(c.p.z - c.fz) > 0.3 || c.p.y < c.fy - 0.5) {
-        const gy = T ? floorAt(c.p.x, c.p.y + c.s * 0.5, c.p.z) : -1e9;
+        const gy = T ? (solidAt(c.p.x, c.p.y, c.p.z) ? c.p.y - c.s * 0.5 : floorAt(c.p.x, c.p.y + c.s * 0.5, c.p.z)) : -1e9;
         const by = G.blockFloor ? G.blockFloor(c.p.x, c.p.y + c.s * 0.5, c.p.z) : -1e9;
         c.fx = c.p.x; c.fz = c.p.z; c.fy = Math.max(gy, by);
       }

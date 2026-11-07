@@ -30,7 +30,8 @@ function groundProbe(p, v) {
 // spring + damper towards standing height, applied every physics step while you're grounded
 G.extraForces.push(() => {
   const pl = G.player;
-  if (!pl || !pl.hover) return;
+  // (not while driving: you're in the seat, not on your feet)
+  if (!pl || !pl.hover || G.vehicle) return;
   const b = pl.body, h = pl.hover;
   const err = h.y - b.position.y;
   const vrel = b.velocity.y - h.vy;

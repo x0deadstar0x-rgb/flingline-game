@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, GROUP, rand, clamp, afterStep, drawPos, drawQuat, addShapesFast } from './core.js';
-import { cubeBurst, spawnCube } from './terrain.js';
+import { cubeBurst, spawnCube, addColumnBlocks } from './terrain.js';
 import { sfx } from './audio.js';
 import * as FX from './fx.js';
 
@@ -199,13 +199,54 @@ function gridBoxes(vox, nx, nz, j0, j1, maxBoxes = Infinity) {
   return out;
 }
 
+// things asleep inside this box wake up (what rested on a shape that changed must notice)
+function wakeIn(aabb) {
+  for (const o of G.world.bodies) {
+    if (o.type !== CANNON.Body.DYNAMIC || o.sleepState !== CANNON.Body.SLEEPING) continue;
+    if (o.aabbNeedsUpdate) o.updateAABB();
+    if (o.aabb.overlaps(aabb)) o.wakeUp();
+  }
+}
+// is there a block of building b at or right next to world point (x, y, z)?
+function solidNear(b, x, y, z) {
+  const i = Math.floor((x - b.x0) / BV), j = Math.floor((y - b.y0) / BV), k = Math.floor((z - b.z0) / BV);
+  for (let dj = -1; dj <= 1; dj++) for (let dk = -1; dk <= 1; dk++) for (let di = -1; di <= 1; di++) if (b.get(i + di, j + dj, k + dk)) return true;
+  return false;
+}
+// ropes and welds tied to a body that's being replaced: moved to the new one if the blocks they
+// hold on to are still there, otherwise they come off
+function moveTies(old, body, b) {
+  const _w = new CANNON.Vec3();
+  if (G.ropes) for (let i = G.ropes.length - 1; i >= 0; i--) {
+    const r = G.ropes[i];
+    for (const end of ['a', 'b']) {
+      if (r[end] !== old) continue;
+      const l = end === 'a' ? r.la : r.lb;
+      old.pointToWorldFrame(l, _w);
+      if (body && b && solidNear(b, _w.x, _w.y, _w.z)) r[end] = body; else if (G.removeRope) { G.removeRope(r); break; }
+    }
+  }
+  if (G.welds) for (let i = G.welds.length - 1; i >= 0; i--) {
+    const w = G.welds[i];
+    if (w.bodyA !== old && w.bodyB !== old) continue;
+    G.world.removeConstraint(w); G.welds.splice(i, 1);
+    const other = w.bodyA === old ? w.bodyB : w.bodyA;
+    if (body && b && solidNear(b, other.position.x, other.position.y, other.position.z)) {
+      const c = new CANNON.LockConstraint(other, body, { maxForce: 1e5 });
+      c.collideConnected = false;
+      G.world.addConstraint(c); G.welds.push(c);
+    } else other.wakeUp();
+  }
+}
+const _oldBox = new CANNON.AABB();
 function rebuildPhysics(b, bi) {
   const band = b.bands[bi];
   band.physDirty = false;
-  if (band.body) { G.world.removeBody(band.body); band.body = null; }
+  const old = band.body;
+  if (old) { _oldBox.copy(old.aabb); G.world.removeBody(old); band.body = null; }
   const j0 = bi * BAND, j1 = Math.min(b.ny, j0 + BAND);
   const boxes = gridBoxes(b.vox, b.nx, b.nz, j0, j1);
-  if (!boxes.length) return;
+  if (!boxes.length) { if (old) { moveTies(old, null, null); wakeIn(_oldBox); } return; }
   const body = new CANNON.Body({ mass: 0, material: G.mats.ground, collisionFilterGroup: GROUP.STATIC });
   const shapes = [], offs = [];
   for (const [i0, ja, k0, i1, jb, k1] of boxes) {
@@ -218,12 +259,8 @@ function rebuildPhysics(b, bi) {
   G.world.addBody(body);
   body.updateAABB();
   band.body = body;
-  // things resting on it should notice it changed
-  for (const o of G.world.bodies) {
-    if (o.type !== CANNON.Body.DYNAMIC || o.sleepState !== CANNON.Body.SLEEPING) continue;
-    if (o.aabbNeedsUpdate) o.updateAABB();
-    if (o.aabb.overlaps(body.aabb)) o.wakeUp();
-  }
+  if (old) { moveTies(old, body, b); wakeIn(_oldBox); }
+  wakeIn(body.aabb);
 }
 function rebuildMesh(b, bi) {
   const band = b.bands[bi];
@@ -352,7 +389,7 @@ export function blastBuildings(pos, R, opts = {}) {
   let total = 0;
   const reach = R * 1.8 + 1;
   eachNear(pos.x - reach, pos.z - reach, pos.x + reach, pos.z + reach, (b) => {
-    if (pos.y + reach < b.y0 || pos.y - reach > b.y0 + b.ny * BV) return;
+    if (b.solid <= 0 || pos.y + reach < b.y0 || pos.y - reach > b.y0 + b.ny * BV) return;
     const r = carve(b, pos.x, pos.y, pos.z, R, opts);
     if (r) total += r.n;
   });
@@ -398,7 +435,7 @@ function layerLoads(b) {
       w++;
       if (j > 0 && !IS_GLASS[c] && vox[id - lay]) { s++; sx += i; sz += k; }
     }
-    W[j] = w; S[j] = s; SX[j] = s ? sx / s : 0; SZ[j] = s ? sz / s : 0;
+    W[j] = w; S[j] = s; SX[j] = s ? sx / s : nx / 2; SZ[j] = s ? sz / s : nz / 2;
   }
   for (let j = ny - 1; j >= 0; j--) W[j] += W[j + 1]; // weight on and above each layer
   return { W, S, SX, SZ };
@@ -431,7 +468,7 @@ function checkIntegrity2(b) {
   let tilt = null;
   if (cut) {
     const ox = (L.SX[cut] - nx / 2) / (nx / 2), oz = (L.SZ[cut] - nz / 2) / (nz / 2);
-    tilt = new THREE.Vector3(-oz, 0, ox).multiplyScalar(0.45); // it tips towards the side that gave way
+    tilt = new THREE.Vector3(-oz, 0, ox).multiplyScalar(0.18); // it leans a little towards the side that gave way
     crushLayers(b, Math.max(1, cut - 2), Math.min(ny, cut + 4));
   }
   let qh = 0, qt = 0;
@@ -449,7 +486,7 @@ function checkIntegrity2(b) {
     if (vox[q = id - lay] && !mark[q]) { mark[q] = 1; queue[qt++] = q; }
     if (vox[q = id + lay] && !mark[q]) { mark[q] = 1; queue[qt++] = q; }
   }
-  if (qt >= b.solid) { b.solid = qt; return; }
+  if (qt >= b.solid) { b.solid = qt; for (let bi = 0; bi < b.nb; bi++) if (b.bands[bi].physDirty) rebuildPhysics(b, bi); return; }
   // the rest is hanging in the air: each connected lump breaks off
   const lumps = [];
   for (let id = 0; id < N; id++) {
@@ -473,25 +510,86 @@ function checkIntegrity2(b) {
   for (let bi = 0; bi < b.nb; bi++) if (b.bands[bi].physDirty) rebuildPhysics(b, bi);
 }
 
-// a storey gives way: its blocks turn to rubble and dust
+// a storey gives way: its blocks turn to rubble (piled round the building) and dust
 function crushLayers(b, ja, jb) {
   const { vox, nx, nz } = b, lay = nx * nz;
-  const cols = [];
+  const cols = [], hexes = [];
   let n = 0;
   for (let j = ja; j < jb; j++) for (let q = 0; q < lay; q++) {
     const id = j * lay + q, c = vox[id];
     if (!c) continue;
     vox[id] = 0; n++;
     if (Math.random() < 0.03 && cols.length < 40) cols.push([q % nx, j, (q / nx) | 0, PAL[c].hex]);
+    if (hexes.length < 24 && !IS_GLASS[c] && Math.random() < 0.05) hexes.push(PAL[c].hex);
   }
-  if (!n) return;
+  if (!n) return 0;
   b.solid -= n;
   b.dirtyLayers(ja, jb);
   for (const [i, j, k, hex] of cols) spawnCube(new THREE.Vector3(b.x0 + (i + 0.5) * BV, b.y0 + (j + 0.5) * BV, b.z0 + (k + 0.5) * BV), new THREE.Vector3(rand(-4, 4), rand(0, 3), rand(-4, 4)), hex, BV * 0.9, 3);
   const y = b.y0 + (ja + jb) / 2 * BV;
-  for (let q = 0; q < 8; q++) FX.smoke(new THREE.Vector3(b.x0 + rand(0.1, 0.9) * nx * BV, y, b.z0 + rand(0.1, 0.9) * nz * BV), 2, 0xa8a196, 1.6);
   const at = new THREE.Vector3(b.x0 + nx * BV / 2, y, b.z0 + nz * BV / 2);
+  dustBurst(at, Math.max(nx, nz) * BV * 0.5, 14);
+  rubble(at.x, at.z, Math.max(nx, nz) * BV * 0.5 + 6, n * 0.3, hexes, b.y0);
   sfx.crumble(at); sfx.explosion(0.35, at);
+  return n;
+}
+// the floors at the top of what's left of a building give way under something landing on them
+function crushTop(b, layers) {
+  const lay = b.nx * b.nz;
+  let top = -1;
+  for (let j = b.ny - 1; j >= 1 && top < 0; j--) for (let q = j * lay, e = q + lay; q < e; q++) if (b.vox[q]) { top = j; break; }
+  if (top < 2) return 0;
+  const n = crushLayers(b, Math.max(1, top - layers + 1), top + 1);
+  if (n && b.checkAt < 0) b.checkAt = G.time + 0.08;
+  return n;
+}
+// a wide, low cloud of dust rolling out from a collapse
+function dustBurst(c, r, n) {
+  for (let q = 0; q < n; q++) {
+    const a = rand(0, Math.PI * 2), s = rand(0.3, 1), sp = rand(3, 10);
+    FX.particle({ pos: new THREE.Vector3(c.x + Math.cos(a) * r * s, c.y + rand(-1, 1.5), c.z + Math.sin(a) * r * s), vel: new THREE.Vector3(Math.cos(a) * sp, rand(0.3, 2.5), Math.sin(a) * sp), color: [0xb0a99c, 0x9c958a, 0xc4bdb0][q % 3], size: rand(1.4, 3), life: rand(2.5, 5), gravity: -0.12, drag: 1.1, grow: 1.5, shrink: false, opacity: 0.55, spin: 0.5, floor: false });
+  }
+}
+// Rubble: `blocks` blocks of debris piled up as real ground (you can climb it, dig it, blow it
+// up) in a low mound around (cx, cz), keeping clear of buildings still standing there.
+function rubble(cx, cz, R, blocks, hexes, groundY) {
+  const T = G.terrain;
+  blocks = Math.round(blocks);
+  if (!T || blocks < 6) return;
+  const N = T.N, TV = 0.5;
+  const near = [];
+  eachNear(cx - R, cz - R, cx + R, cz + R, (b) => near.push(b));
+  const busy = (x, z, y0, y1) => {
+    for (const b of near) {
+      const i = Math.floor((x - b.x0) / BV), k = Math.floor((z - b.z0) / BV);
+      if (i < 0 || k < 0 || i >= b.nx || k >= b.nz) continue;
+      for (let j = Math.max(0, Math.floor((y0 - b.y0) / BV)); j <= Math.min(b.ny - 1, Math.floor((y1 - b.y0) / BV)); j++) if (b.vox[(j * b.nz + k) * b.nx + i]) return true;
+    }
+    return false;
+  };
+  const cols = [];
+  let wsum = 0;
+  const ia = Math.max(0, Math.floor((cx - R - T.x0) / TV)), ib = Math.min(N - 1, Math.floor((cx + R - T.x0) / TV));
+  const ja = Math.max(0, Math.floor((T.z0 - cz - R) / TV)), jb = Math.min(N - 1, Math.floor((T.z0 - cz + R) / TV));
+  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
+    const x = T.x0 + (i + 0.5) * TV, z = T.z0 - (j + 0.5) * TV, d = Math.hypot(x - cx, z - cz);
+    if (d > R) continue;
+    const k = i * N + j, top = T.lv[k] * TV;
+    if (groundY !== undefined && top > groundY + 6) continue; // (not up on a roof)
+    if (busy(x, z, top - 0.25, top + 3)) continue;
+    const w = (1 - (d / R) ** 2) * (0.85 + 0.3 * hash3(i >> 1, j >> 1, 7));
+    cols.push([k, w]); wsum += w;
+  }
+  if (!cols.length) return;
+  const per = blocks / wsum, list = [];
+  const pal = hexes && hexes.length ? hexes : [0x8a857c, 0x9a9488];
+  for (const [k, w] of cols) {
+    const L = Math.min(28, Math.round(w * per));
+    if (L <= 0) continue;
+    const c = pal[(Math.random() * pal.length) | 0];
+    list.push([k, T.lv[k], T.lv[k] + L, ((c >> 16 & 255) * 0.82 << 16) | ((c >> 8 & 255) * 0.82 << 8) | ((c & 255) * 0.82 | 0)]);
+  }
+  addColumnBlocks(list);
 }
 
 // a lump of blocks (ids in b) that lost its support: it becomes a falling piece
@@ -515,7 +613,7 @@ function breakOff(b, ids, tilt = null) {
   b.dirtyLayers(j0, j1);
   const ox = b.x0 + i0 * BV, oy = b.y0 + j0 * BV, oz = b.z0 + k0 * BV;
   const grid = { vox: lv, nx: lx, ny: ly, nz: lz };
-  if (ids.length <= 14) { toCubes(grid, ox, oy, oz, null, new THREE.Vector3(0, -1, 0)); return; }
+  if (ids.length <= 14) { toCubes(grid, new THREE.Vector3(ox, oy, oz).add(mass.com), mass.com, null, new THREE.Vector3(0, -1, 0)); return; }
   // Drawing the piece: bands of the building that came off whole keep their mesh (no
   // re-meshing: a falling tower costs next to nothing); the rest is meshed now.
   const parts = [];
@@ -523,7 +621,7 @@ function breakOff(b, ids, tilt = null) {
     const ja = bi * BAND, jb = Math.min(b.ny, ja + BAND);
     const lo = Math.max(ja, j0), hi = Math.min(jb, j1 + 1);
     const band = b.bands[bi];
-    if (band.mesh && lo === ja && hi === jb && bandEmpty(b, ja, jb) && !touches(b, lv, lx, lz, i0, k0, j0, ja, ja - 1) && !touches(b, lv, lx, lz, i0, k0, j0, jb - 1, jb)) {
+    if (band.mesh && !band.meshDirty && lo === ja && hi === jb && bandEmpty(b, ja, jb)) {
       const geo = band.mesh.geometry; // in world coordinates: its origin sits at -corner
       band.mesh.removeFromParent(); band.mesh = null; band.meshDirty = false;
       parts.push({ j0: ja - j0, j1: jb - j0, geo, base: new THREE.Vector3(-ox, -oy, -oz) });
@@ -533,6 +631,7 @@ function breakOff(b, ids, tilt = null) {
     }
   }
   const p = spawnPiece(grid, new THREE.Vector3(ox, oy, oz), null, new THREE.Vector3(0, -0.5, 0), tilt, null, parts, mass);
+  if (p) p.src = b;
   if (p && ids.length > 1500) {
     // a whole section is coming down
     sfx.explosion(0.5, p.body.position);
@@ -547,17 +646,6 @@ function bandEmpty(b, ja, jb) {
   for (let id = ja * lay, e = jb * lay; id < e; id++) if (b.vox[id]) return false;
   return true;
 }
-// does a block of the piece in piece-layer (jl - j0) sit right against a block still in the
-// building at layer jb? (then a mesh made inside the building lacks the faces between them)
-function touches(b, lv, lx, lz, i0, k0, j0, jl, jb) {
-  if (jb < 0 || jb >= b.ny) return false;
-  const pl = (jl - j0) * lz * lx;
-  for (let k = 0; k < lz; k++) for (let i = 0; i < lx; i++) {
-    if (lv[pl + k * lx + i] && b.vox[(jb * b.nz + k + k0) * b.nx + i + i0]) return true;
-  }
-  return false;
-}
-
 // ---------------------------------------------------------------- falling pieces
 const pieces = [];
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion();
@@ -583,9 +671,9 @@ function spawnPiece2(grid, corner, quat, vel, angVel, center, parts, mass) {
     com = new THREE.Vector3(sx / n * BV, sy / n * BV, sz / n * BV); // centre of mass, from the grid corner
   }
   const worldCenter = center ? center.clone() : corner.clone().add(com);
-  if (n <= 14) { toCubes(grid, worldCenter.x - com.x, worldCenter.y - com.y, worldCenter.z - com.z, quat, vel); return null; }
+  if (n <= 14) { toCubes(grid, worldCenter, com, quat, vel); return null; }
   if (pieces.length >= MAX_PIECES) retireOldest();
-  if (pieces.length >= MAX_PIECES) { toCubes(grid, worldCenter.x - com.x, worldCenter.y - com.y, worldCenter.z - com.z, quat, vel); return null; }
+  if (pieces.length >= MAX_PIECES) { toCubes(grid, worldCenter, com, quat, vel); return null; }
   if (!parts) { const geo = meshGrid(vox, nx, ny, nz, 0, ny, 0, 0, 0); if (!geo) return null; parts = [{ j0: 0, j1: ny, geo, base: new THREE.Vector3() }]; }
   const mesh = new THREE.Group();
   for (const part of parts) {
@@ -662,6 +750,7 @@ G.eatPiece = (body) => { if (body.piece) removePiece(body.piece); };
 function removePiece(p, keepGeometry = false) {
   if (p.dead) return;
   p.dead = true;
+  moveTies(p.body, null, null);
   G.world.removeBody(p.body);
   p.mesh.removeFromParent();
   if (!keepGeometry) for (const part of p.parts) part.geo.dispose();
@@ -676,60 +765,93 @@ function retireOldest() {
   FX.smoke(best.mesh.position.clone(), 4, 0x9a948a, 1 + best.radius * 0.3);
   removePiece(best);
 }
-// blocks -> flying cubes (a few of them; the rest is dust)
-function toCubes(grid, ox, oy, oz, quat, vel, max = 18) {
-  const { vox, nx, ny, nz } = grid;
+// blocks -> flying cubes (a few of them; the rest is dust). comWorld: where the grid's centre of
+// mass `com` (from its corner) is in the world; quat: how the grid is turned
+function toCubes(grid, comWorld, com, quat, vel, max = 18) {
+  const { vox, nx, nz } = grid;
   const ids = [];
   for (let id = 0; id < vox.length; id++) if (vox[id]) ids.push(id);
   const step = Math.max(1, Math.ceil(ids.length / max));
-  const center = new THREE.Vector3(ox + nx * BV / 2, oy + ny * BV / 2, oz + nz * BV / 2);
   for (let q = 0; q < ids.length; q += step) {
     const id = ids[q];
     const i = id % nx, k = ((id / nx) | 0) % nz, j = (id / (nx * nz)) | 0;
-    _v.set((i + 0.5) * BV, (j + 0.5) * BV, (k + 0.5) * BV);
-    if (quat) { _v.sub(_tmpC.set(nx * BV / 2, ny * BV / 2, nz * BV / 2)).applyQuaternion(quat).add(center); }
-    else _v.add(_tmpC.set(ox, oy, oz));
+    _v.set((i + 0.5) * BV - com.x, (j + 0.5) * BV - com.y, (k + 0.5) * BV - com.z);
+    if (quat) _v.applyQuaternion(quat);
+    _v.add(comWorld);
     const v = (vel ? vel.clone() : new THREE.Vector3()).add(new THREE.Vector3(rand(-2, 2), rand(0, 2.5), rand(-2, 2)));
     spawnCube(_v, v, PAL[vox[id]].hex, BV * 0.9, 3 + Math.random() * 2);
   }
-  if (ids.length > 30) FX.smoke(center, 3, 0xa09a90, 0.8 + Math.cbrt(ids.length) * 0.15);
+  if (ids.length > 30) FX.smoke(comWorld.clone(), 3, 0xa09a90, 0.8 + Math.cbrt(ids.length) * 0.15);
 }
-const _tmpC = new THREE.Vector3();
 
-// a piece hits hard: it breaks into smaller pieces (and small ones into cubes)
+// A piece hits something hard. Buildings don't burst into big chunks: a tall falling section
+// crushes its lowest floor into rubble and dust on whatever it lands on (and the floors under
+// it give way too) and keeps coming down: it collapses into itself, floor by floor. Anything
+// else crumbles where it lands. The rubble piles up as real ground.
+const _up = new THREE.Vector3();
 function shatterPiece(p, v, at) {
   if (p.dead) return;
   const { grid, body } = p;
   const pos = new THREE.Vector3(body.position.x, body.position.y, body.position.z);
   const quat = new THREE.Quaternion(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
   const vel = new THREE.Vector3(body.velocity.x, body.velocity.y, body.velocity.z);
-  const w = new THREE.Vector3(body.angularVelocity.x, body.angularVelocity.y, body.angularVelocity.z);
-  const byBands = p.parts.length > 1;
-  removePiece(p, byBands);
+  const upright = _up.set(0, 1, 0).applyQuaternion(quat).y > 0.75;
   sfx.crumble(pos);
-  if (p.n > 300) FX.smoke(pos, Math.min(10, 3 + Math.round(p.n / 400)), 0xa59f94, 1.2 + Math.cbrt(p.n) * 0.18);
-  if (p.n < 50) { toCubes(grid, pos.x - grid.nx * BV / 2, pos.y - grid.ny * BV / 2, pos.z - grid.nz * BV / 2, quat, vel.multiplyScalar(0.4), 14); return; }
-  // a big section breaks along its floors first (keeping their meshes), then those break up
-  const regions = byBands ? p.parts.map((q) => [0, q.j0, 0, grid.nx, q.j1, grid.nz]) : splitRegions(grid.nx, grid.ny, grid.nz, clamp(Math.round(p.n / 140), 2, p.n > 4000 ? 10 : 7));
-  const kick = clamp(v * 0.18, 1, 5);
-  for (let ri = 0; ri < regions.length; ri++) {
-    const r = regions[ri];
-    const sub = extract(grid, r);
-    let parts = null;
-    if (byBands) {
-      const old = p.parts[ri];
-      if (!sub) { old.geo.dispose(); continue; }
-      // same geometry; its origin moves with the new piece's corner
-      parts = [{ j0: 0, j1: sub.grid.ny, geo: old.geo, base: old.base.clone().sub(new THREE.Vector3(sub.ci * BV, (r[1] + sub.cj) * BV, sub.ck * BV)) }];
+  if (upright && p.parts.length > 1 && p.n > 300) {
+    // the bottom floor goes
+    const cut = p.parts[0].j1;
+    const crushed = takeLayers(grid, 0, cut);
+    const sub = extract(grid, [0, cut, 0, grid.nx, grid.ny, grid.nz]);
+    removePiece(p, true);
+    p.parts[0].geo.dispose();
+    const low = new THREE.Vector3(grid.nx * BV / 2, cut * BV / 2, grid.nz * BV / 2).sub(p.com).applyQuaternion(quat).add(pos);
+    const r = Math.max(grid.nx, grid.nz) * BV * 0.5;
+    dustBurst(low, r, 18);
+    FX.smoke(low, 6, 0xa59f94, 2 + r * 0.15);
+    G.shake = Math.max(G.shake, Math.min(0.9, p.n / 30000));
+    rubble(low.x, low.z, r + 7, crushed.n * 0.3, crushed.hexes, p.src ? p.src.y0 : undefined);
+    if (p.src) crushTop(p.src, clamp(Math.round(p.n / (p.src.nx * p.src.nz * 0.25)), 4, 14));
+    if (sub) {
+      // the rest keeps falling; its new bottom floor is redrawn (it had no faces where it sat
+      // on the floor that's gone)
+      const shift = new THREE.Vector3(sub.ci * BV, (cut + sub.cj) * BV, sub.ck * BV);
+      const parts = p.parts.slice(1).map((q) => ({ j0: q.j0 - cut - sub.cj, j1: q.j1 - cut - sub.cj, geo: q.geo, base: q.base.clone().sub(shift) }));
+      if (parts.length) {
+        const f = parts[0];
+        const geo = meshGrid(sub.grid.vox, sub.grid.nx, sub.grid.ny, sub.grid.nz, Math.max(0, f.j0), Math.min(sub.grid.ny, f.j1), 0, 0, 0);
+        f.geo.dispose();
+        if (geo) { f.geo = geo; f.base = new THREE.Vector3(); } else parts.shift();
+      }
+      const local = new THREE.Vector3(sub.ci * BV + sub.com.x, (cut + sub.cj) * BV + sub.com.y, sub.ck * BV + sub.com.z).sub(p.com);
+      const world = local.applyQuaternion(quat).add(pos);
+      const pv = new THREE.Vector3(vel.x * 0.3, Math.min(vel.y * 0.5, -7), vel.z * 0.3);
+      const np = spawnPiece(sub.grid, null, quat, pv, new THREE.Vector3(rand(-0.1, 0.1), 0, rand(-0.1, 0.1)), world, parts.length ? parts : null, { n: sub.n, com: sub.com });
+      if (np) np.src = p.src;
+      else for (const q of parts) q.geo.dispose();
     }
-    if (!sub) continue;
-    // this part's centre of mass: in the old piece's frame (from its centre of mass), then in the world
-    const local = new THREE.Vector3((r[0] + sub.ci) * BV + sub.com.x, (r[1] + sub.cj) * BV + sub.com.y, (r[2] + sub.ck) * BV + sub.com.z).sub(p.com);
-    const world = local.applyQuaternion(quat).add(pos);
-    const out = world.clone().sub(at || pos).setY(0.4).normalize().multiplyScalar(kick * rand(0.4, 1));
-    const pv = vel.clone().multiplyScalar(0.35).add(new THREE.Vector3().crossVectors(w, world.clone().sub(pos))).add(out);
-    spawnPiece(sub.grid, null, quat, pv, new THREE.Vector3(rand(-1.5, 1.5), rand(-1.5, 1.5), rand(-1.5, 1.5)), world, parts);
+    return;
   }
+  // it crumbles where it lands: rubble, dust and a few loose blocks
+  removePiece(p);
+  const all = takeLayers(grid, 0, grid.ny, true);
+  const r = Math.max(2, Math.cbrt(p.n) * BV * 0.9);
+  dustBurst(pos, r, Math.min(22, 4 + Math.round(p.n / 120)));
+  if (p.n > 60) rubble(pos.x, pos.z, r + 3, p.n * 0.3, all.hexes, p.src ? p.src.y0 : undefined);
+  toCubes(grid, pos, p.com, quat, vel.multiplyScalar(0.3), p.n > 60 ? 12 : 14);
+}
+// how many blocks (and some of their colours) layers ja..jb-1 of a grid hold; cleared unless keep
+function takeLayers(grid, ja, jb, keep = false) {
+  const { vox, nx, nz } = grid, lay = nx * nz;
+  let n = 0;
+  const hexes = [];
+  for (let id = ja * lay, e = Math.min(vox.length, jb * lay); id < e; id++) {
+    const c = vox[id];
+    if (!c) continue;
+    n++;
+    if (hexes.length < 24 && !IS_GLASS[c] && (n & 15) === 1) hexes.push(PAL[c].hex);
+    if (!keep) vox[id] = 0;
+  }
+  return { n, hexes };
 }
 // split a grid's box into `target` regions (cut the biggest along its longest side, a bit off-centre)
 function splitRegions(nx, ny, nz, target) {

@@ -30,9 +30,12 @@ export const ACTIONS = [
   ['nextTool', 'Swap tool (next)', 'Tools'],
   ['undo', 'Undo last spawn', 'Tools'],
   ['interact', 'Enter / exit vehicle, interact', 'Tools'],
+  ['detonate', 'Set off your C4', 'Tools'],
+  ['flashlight', 'Flashlight on / off', 'Tools'],
   ['slot1', 'Hotbar 1', 'Hotbar'], ['slot2', 'Hotbar 2', 'Hotbar'], ['slot3', 'Hotbar 3', 'Hotbar'], ['slot4', 'Hotbar 4', 'Hotbar'], ['slot5', 'Hotbar 5', 'Hotbar'],
   ['slot6', 'Hotbar 6', 'Hotbar'], ['slot7', 'Hotbar 7', 'Hotbar'], ['slot8', 'Hotbar 8', 'Hotbar'], ['slot9', 'Hotbar 9', 'Hotbar'], ['slot10', 'Hotbar 10', 'Hotbar'],
   ['menu', 'Menu', 'Game'],
+  ['mainMenu', 'Main menu (play, host, join)', 'Game'],
   ['lockMouse', 'Lock / unlock the mouse', 'Game'],
   ['help', 'Controls screen', 'Game'],
   ['chat', 'Chat (multiplayer)', 'Game'],
@@ -52,11 +55,11 @@ const BASE = {
   jump: ['Space'], sprint: ['ShiftLeft', 'ShiftRight'], crouch: ['ControlLeft'], fly: ['KeyN'],
   lookUp: ['ArrowUp'], lookDown: ['ArrowDown'], lookLeft: ['ArrowLeft'], lookRight: ['ArrowRight'],
   use: ['Mouse0', 'Enter'], grab: ['KeyF'], reelIn: ['KeyZ'], reelOut: ['KeyX'], rotate: ['KeyR'],
-  anchor: ['KeyQ'], nextItem: ['KeyT'], prevTool: ['Comma'], nextTool: ['Period'], undo: ['KeyU'], interact: ['KeyV'],
+  anchor: ['KeyQ'], nextItem: ['KeyT'], prevTool: ['Comma'], nextTool: ['Period'], undo: ['KeyU'], interact: ['KeyV'], detonate: ['KeyB'], flashlight: ['KeyL'],
   slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'], slot4: ['Digit4'], slot5: ['Digit5'],
   slot6: ['Digit6'], slot7: ['Digit7'], slot8: ['Digit8'], slot9: ['Digit9'], slot10: ['Digit0'],
-  menu: ['KeyE', 'Tab'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
-  mute: ['KeyM'], quality: ['KeyL'], sensDown: ['Minus'], sensUp: ['Equal'], lockMouse: ['BracketRight'], photo: ['F1'],
+  menu: ['KeyE', 'Tab'], mainMenu: ['KeyM'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
+  mute: ['KeyK'], quality: ['KeyO'], sensDown: ['Minus'], sensUp: ['Equal'], lockMouse: ['BracketRight'], photo: ['F1'],
 };
 const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]]; for (const k in over) o[k] = over[k]; return o; };
 
@@ -96,6 +99,12 @@ function load() {
     if (!binds.sensDown.length) binds.sensDown = ['Minus'];
     if (!binds.sensUp.length) binds.sensUp = ['Equal'];
   }
+  // controls saved before M opened the main menu and L the flashlight: mute moves to K, graphics to O
+  if (saved && (saved.v || 1) < 4) {
+    const free = (c) => !Object.values(binds).some((l) => l.includes(c));
+    if (!binds.mute.length && free('KeyK')) binds.mute = ['KeyK'];
+    if (!binds.quality.length && free('KeyO')) binds.quality = ['KeyO'];
+  }
   if (saved && (saved.v || 1) < 2) {
     for (const k in binds) binds[k] = binds[k].filter((x) => x !== 'KeyE');
     binds.menu = ['KeyE', ...binds.menu.filter((x) => x !== 'KeyE')].slice(0, 3);
@@ -104,7 +113,7 @@ function load() {
 load();
 
 export function saveControls() {
-  setP('controls', { v: 3, preset: ctl.preset, wheel: ctl.wheel, binds });
+  setP('controls', { v: 4, preset: ctl.preset, wheel: ctl.wheel, binds });
 }
 export function applyPreset(id) {
   const p = PRESETS[id];

@@ -11,12 +11,12 @@ import { initNuke, updateNukes } from './nuke.js';
 import { updateBuildings } from './buildings.js';
 import { toggleVehicle, updateVehicle } from './vehicles.js';
 import { updateBubbles } from './dummy.js';
-import { net, updateNet, doAction, shareHeld, tugPlayer, flingPlayer, withSeed, shareMap, hostRoom, joinRoom } from './net.js';
+import { net, updateNet, doAction, shareHeld, tugPlayer, flingPlayer, withSeed, shareMap, hostRoom, joinRoom, leaveRoom, asMe } from './net.js';
 G.shareMap = shareMap;
 import * as Items from './items.js';
 import { Player } from './player.js';
-import { loadMap, updateMap, applyTime } from './map.js';
-import { TOOL, updateProjectiles, updateBlackHoles, updateTornados, updateQuake, updateStorms } from './tools/index.js';
+import { loadMap, updateMap, applyTime, MAPS } from './map.js';
+import { TOOL, TOOLS, updateProjectiles, updateBlackHoles, updateTornados, updateQuake, updateStorms } from './tools/index.js';
 import { initViewmodel, renderViewmodel } from './viewmodel.js';
 import { VoxelBroadphase } from './terrain.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
@@ -62,17 +62,31 @@ const headlamp = new THREE.SpotLight(0xfff0d8, 0, 36, 0.66, 0.6, 1.0);
 scene.add(headlamp, headlamp.target);
 let underground = 0;
 const _fwd = new THREE.Vector3();
+// The flashlight (its own key): a strong beam that reaches far, on top of the headlamp
+let flashOn = 0, flashK = 0;
+G.toggleFlashlight = () => { flashOn = flashOn ? 0 : 1; sfx.beep(); toast(flashOn ? 'Flashlight ON' : 'Flashlight off'); return flashOn; };
 function updateUnderground(dt) {
   const c = camera.position;
   const top = G.groundAt ? G.groundAt(c.x, c.z) : -1e9;
   const inCave = top > c.y + 0.5 && G.solidAt && !G.solidAt(c.x, c.y, c.z);
   const want = inCave ? clamp((top - c.y - 1) / 5, 0, 1) : 0;
   underground += (want - underground) * Math.min(1, dt * 2.5);
-  if (underground < 0.002 && want === 0) { if (headlamp.intensity) { headlamp.intensity = 0; sun.intensity = G.baseSun ?? sun.intensity; hemi.intensity = G.baseHemi ?? hemi.intensity; } return; }
-  sun.intensity = (G.baseSun ?? 2.2) * (1 - 0.92 * underground);
-  hemi.intensity = (G.baseHemi ?? 1.1) * (1 - 0.6 * underground);
-  headlamp.intensity = 8 * underground;
-  headlamp.position.copy(c);
+  flashK += (flashOn - flashK) * Math.min(1, dt * 14);
+  if (underground < 0.002 && want === 0) {
+    if (sun.intensity !== (G.baseSun ?? sun.intensity)) { sun.intensity = G.baseSun ?? sun.intensity; hemi.intensity = G.baseHemi ?? hemi.intensity; }
+    underground = 0;
+  } else {
+    sun.intensity = (G.baseSun ?? 2.2) * (1 - 0.92 * underground);
+    hemi.intensity = (G.baseHemi ?? 1.1) * (1 - 0.6 * underground);
+  }
+  // headlamp underground: soft and wide. Flashlight: a bright, longer, tighter beam
+  const fl = flashK > 0.01 ? flashK : 0;
+  headlamp.intensity = Math.max(8 * underground, 0) + fl * 70;
+  headlamp.distance = 36 + fl * 104;
+  headlamp.angle = 0.66 - fl * 0.16;
+  headlamp.penumbra = 0.6 - fl * 0.25;
+  if (!headlamp.intensity) return;
+  headlamp.position.copy(c).add(_fwd.set(0.25, -0.2, 0).applyQuaternion(camera.quaternion));
   headlamp.target.position.copy(c).add(_fwd.set(0, 0, -10).applyQuaternion(camera.quaternion));
 }
 
@@ -143,10 +157,85 @@ G.requestLock = requestLock;
 function start() {
   initAudio();
   playing = true;
+  G.everPlayed = true;
   document.getElementById('start').classList.add('hidden');
+  document.body.classList.remove('inmenu');
   requestLock();
 }
-document.getElementById('start').addEventListener('click', start);
+// ---- the main menu (the start screen): play, host a room, join a room. M brings it back.
+const startEl = document.getElementById('start');
+startEl.addEventListener('click', () => start());
+// (clicks on the map picker and the rooms panel don't start the game)
+for (const el of startEl.querySelectorAll('.mp, .maps')) el.addEventListener('click', (e) => e.stopPropagation());
+// the map picker on the main menu (the map shows behind it)
+function renderStartMaps() {
+  const box = document.getElementById('mapchips');
+  const cur = MAPS.find((m) => m.id === G.mapId);
+  document.getElementById('mapname').textContent = cur ? `${cur.icon} ${cur.name}` : '';
+  box.innerHTML = '';
+  if (net.active && !net.host) { box.innerHTML = '<span class="mpstatus">The host picks the map.</span>'; return; }
+  for (const m of MAPS) {
+    const btn = document.createElement('button');
+    btn.textContent = `${m.icon} ${m.name}`;
+    btn.title = m.desc;
+    if (m.id === G.mapId) btn.className = 'on';
+    btn.onclick = () => {
+      if (m.id === G.mapId) return;
+      if (net.active && net.host) { G.shareMap(m.id); G.loadMapNet(m.id); } else loadMap(m.id);
+      renderStartMaps();
+    };
+    box.appendChild(btn);
+  }
+}
+document.getElementById('counts').textContent = `${MAPS.length} MAPS · ${TOOLS.length} TOOLS · ${Items.CATALOG.length} THINGS TO SPAWN`;
+// behind the main menu the camera circles slowly around the map
+let orbitA = 0;
+function menuOrbit(dt) {
+  orbitA += dt * 0.05;
+  const s = G.spawn || new THREE.Vector3();
+  camera.position.set(s.x + Math.cos(orbitA) * 52, s.y + 22, s.z + Math.sin(orbitA) * 52);
+  camera.lookAt(s.x, s.y + 3, s.z);
+}
+function toMainMenu() {
+  if (UI.menuOpen) closeMenu();
+  playing = false;
+  escPaused = false;
+  if (isLocked()) document.exitPointerLock();
+  clearInput();
+  startEl.classList.remove('hidden');
+  document.body.classList.add('inmenu');
+  renderStartRoom();
+  renderStartMaps();
+  updatePausedOverlay();
+}
+G.toMainMenu = toMainMenu;
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function renderStartRoom() {
+  const w = document.getElementById('mproom');
+  if (!w) return;
+  const go = startEl.querySelector('.go');
+  if (net.active) {
+    go.textContent = 'BACK TO THE GAME';
+    w.innerHTML = `<div class="inroom">In room <b>${esc(net.code)}</b>${net.host ? ' (you host it)' : ''} · ${net.players.size + 1} player${net.players.size ? 's' : ''}</div>
+      <button id="mpleave" class="danger">Leave the room</button>`;
+    w.querySelector('#mpleave').onclick = (e) => { e.stopPropagation(); leaveRoom(); renderStartRoom(); };
+  } else {
+    go.textContent = playing || G.everPlayed ? 'KEEP PLAYING' : 'PLAY';
+    w.innerHTML = `<div class="mprow"><button id="mphost">HOST A ROOM</button>
+        <label class="chk"><input id="mpnpc" type="checkbox" checked> NPCs</label>
+        <input id="mppass" type="text" maxlength="24" placeholder="password (optional)"></div>
+      <div class="mprow"><input id="mpcode" type="text" maxlength="8" placeholder="ROOM CODE" style="text-transform:uppercase">
+        <input id="mpjpass" type="text" maxlength="24" placeholder="password (if any)">
+        <button id="mpjoin">JOIN</button></div>
+      <div class="mpstatus">${esc(net.status || 'Play with friends: host a room and tell them the code, or join theirs.')}</div>`;
+    w.querySelector('#mphost').onclick = () => { hostRoom({ password: w.querySelector('#mppass').value.trim(), npcs: w.querySelector('#mpnpc').checked }); start(); };
+    const join = () => { const code = w.querySelector('#mpcode').value.trim(); if (code.length < 4) { toast('Type the room code first'); return; } joinRoom(code, w.querySelector('#mpjpass').value.trim()); start(); };
+    w.querySelector('#mpjoin').onclick = join;
+    w.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && i.id !== 'mppass') join(); }));
+  }
+}
+{ const prev = net.onChange; net.onChange = () => { if (prev) prev(); if (!startEl.classList.contains('hidden')) { renderStartRoom(); renderStartMaps(); } }; }
+renderStartRoom();
 document.addEventListener('pointerlockchange', () => {
   if (!isLocked()) clearInput(); else lockFails = 0;
   updatePausedOverlay();
@@ -262,6 +351,7 @@ function globalActions() {
   if (input.tap('menu')) { if (UI.menuOpen) closeMenu(); else openMenu(); }
   if (input.tap('help') && !UI.menuOpen) openMenu('help');
   if (input.tap('mute')) toast(toggleMute() ? 'Muted' : 'Sound on');
+  if (input.tap('mainMenu') && playing) toMainMenu();
 }
 
 // gameplay keys (only while actually playing)
@@ -271,9 +361,16 @@ function gameActions(dt) {
   if (input.tap('nextTool')) cycleTool(1);
   if (input.tap('fly')) { G.player.flying = !G.player.flying; toast(G.player.flying ? `Fly mode ON (${bindText('jump', 1)} up, ${bindText('sprint', 1)} down)` : 'Fly mode OFF'); }
   if (input.tap('interact') && !toggleVehicle()) toast('Nothing to get into here (walk up to a car)');
-  if (input.tap('slowmo')) { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); }
-  if (input.tap('clear')) { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
-  if (input.tap('resetMap')) { loadMap(G.mapId); toast('Map reset'); }
+  if (input.tap('flashlight')) G.toggleFlashlight();
+  if (input.tap('detonate') && TOOL.c4) { const n = doAction('det', TOOL.c4, () => TOOL.c4.det()); if (!n) toast(`No C4 planted (C4 Charges tool, then ${bindText('detonate', 1)})`); }
+  // (in a room everyone shares one world: no slow-mo or clearing just for you; the host resets it for all)
+  if (input.tap('slowmo')) { if (net.active) toast('No slow-mo in a room'); else { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); } }
+  if (input.tap('clear')) { if (net.active) toast('Clearing is off in a room'); else { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); } }
+  if (input.tap('resetMap')) {
+    if (!net.active) { loadMap(G.mapId); toast('Map reset'); }
+    else if (net.host) { G.shareMap(G.mapId); G.loadMapNet(G.mapId); toast('Map reset for everyone'); }
+    else toast('Only the host can reset the map');
+  }
   if (input.tap('quality')) { setSetting('quality', S.quality === 'high' ? 'low' : 'high'); toast(S.quality === 'high' ? 'Graphics: high' : 'Graphics: low (faster)'); }
   if (input.tap('undo')) undoSpawn();
   if (input.tap('photo')) { document.body.classList.toggle('photo'); }
@@ -332,7 +429,7 @@ function gameActions(dt) {
   if (input.held('use') && !useLock && !G.grab && tool.held) {
     const cd0 = tool.cd || 0;
     // (in a room, held tools are shared 10 times a second)
-    tool.held(dt);
+    asMe(() => tool.held(dt));
     if (net.active) { heldAcc += dt; if (heldAcc >= 0.1) { shareHeld(tool, heldAcc); heldAcc = 0; } }
     if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1);
   }
@@ -391,7 +488,8 @@ function frame() {
     updateToast(rdt);
     input.lookX = 0; input.lookY = 0;
     endFrame();
-    if (needRender) { needRender = false; renderer.render(scene, camera); renderViewmodel(renderer); }
+    if (!playing) { menuOrbit(rdt); needRender = true; }
+    if (needRender) { needRender = false; renderer.render(scene, camera); if (playing) renderViewmodel(renderer); }
     return;
   }
   if (wasPaused) { setAudioPaused(false); wasPaused = false; }
@@ -473,11 +571,15 @@ function frame() {
   sun.target.position.set(pp.x, pp.y, pp.z);
 
   endFrame();
+  if (!playing) menuOrbit(rdt); // (in a room the world goes on behind the main menu)
   renderer.render(scene, camera);
-  if (!G.vehicle) renderViewmodel(renderer);
+  if (!G.vehicle && playing) renderViewmodel(renderer);
   needRender = false;
 }
 frame();
+renderStartMaps();
+document.body.classList.add('inmenu');
 window.__G = G; // handy for debugging in the console
+window.__THREE = THREE;
 window.__CANNON = CANNON;
 window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input, isPaused, net, hostRoom, joinRoom };
