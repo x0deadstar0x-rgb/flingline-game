@@ -78,7 +78,7 @@ export function updateBlackHoles(dt) {
     if (h.t >= h.life) {
       G.scene.remove(h.mesh);
       G.blackholes.splice(i, 1);
-      explode(h.pos, 1.9);
+      explode(h.pos, 1.9, { noCrater: true }); // a singularity pops in the air
       FX.confetti(h.pos, 40, 16);
     }
   }
@@ -195,7 +195,7 @@ export const boomTools = [
         pos: start, vel: target.clone().sub(start).divideScalar(1.3), life: 1.3, mesh, collide: false,
         trail: (p) => { for (let i = 0; i < 2; i++) FX.particle({ pos: p.clone().add(new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1))), vel: new THREE.Vector3(), color: [0xff8a1c, 0xffd04a, 0x555555][i + (Math.random() < 0.4 ? 1 : 0)], size: rand(0.6, 1.1), life: 0.6, glow: i === 0, add: true, gravity: 0, grow: 1, shrink: false }); mesh.rotation.x += 0.2; },
         end: (p) => {
-          explode(target.clone().add(new THREE.Vector3(0, 0.5, 0)), 2.3, { fire: true });
+          explode(target.clone().add(new THREE.Vector3(0, 0.5, 0)), 2.3, { fire: true, craterRadius: 4.5, rim: true });
           for (let i = 0; i < 4; i++) createEnt({ ...ITEMS.chunk, size: [0.6, 0.5, 0.6], mat: 'rock', color: 0x4a3328 }, target.clone().add(new THREE.Vector3(rand(-1, 1), 1 + i * 0.6, rand(-1, 1))), { spawned: true, gen: 2, vel: new THREE.Vector3(rand(-8, 8), rand(6, 12), rand(-8, 8)) });
         },
       });
@@ -236,7 +236,7 @@ export const boomTools = [
       projectile({
         pos: target.clone().add(new THREE.Vector3(0, 90, 0)), vel: new THREE.Vector3(0, -37, 0), life: 2.4, collide: false, mesh,
         end: () => {
-          explode(target.clone().add(new THREE.Vector3(0, 1, 0)), 4.5, { fire: true });
+          explode(target.clone().add(new THREE.Vector3(0, 1, 0)), 4.5, { fire: true, craterRadius: 14, rim: true });
           // mushroom cloud
           for (let i = 0; i < 40; i++) {
             const a = rand(0, Math.PI * 2), r = rand(0, 5);

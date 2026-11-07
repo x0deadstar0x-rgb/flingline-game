@@ -45,6 +45,18 @@ export function saveBest() {
   try { localStorage.setItem('fling_best', String(G.stats.best)); } catch (e) { /* ignore */ }
 }
 
+// Where to DRAW a physics body: the smoothed (interpolated) position between
+// physics steps, so things don't move in little jumps on 120/144 Hz screens.
+// Falls back to the real position right after a teleport or before the first step.
+export function drawPos(b) {
+  const ip = b.interpolatedPosition, p = b.position;
+  const dx = ip.x - p.x, dy = ip.y - p.y, dz = ip.z - p.z;
+  return dx * dx + dy * dy + dz * dz < 4 && (ip.x || ip.y || ip.z) ? ip : p;
+}
+export function drawQuat(b) {
+  return drawPos(b) === b.position ? b.quaternion : b.interpolatedQuaternion;
+}
+
 export function later(t, fn) { G.timers.push({ t: G.time + t, fn }); }
 export function afterStep(fn) { G.queue.push(fn); }
 

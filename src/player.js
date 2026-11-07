@@ -5,6 +5,7 @@ import { G, GROUP, raycast, clamp, tv } from './core.js';
 import { buildHumanoid, poseHumanoid } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
+import { updateViewmodel, equipViewmodel } from './viewmodel.js';
 
 export const SPAWN = new THREE.Vector3(0, 1.2, 34);
 
@@ -26,24 +27,6 @@ export class Player {
     const brim = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.25), cap.material);
     brim.position.set(0, 0.15, 0.3);
     this.meshes.head.add(cap, brim);
-    // first-person viewmodel: an arm holding the current tool, attached to the camera
-    this.view = new THREE.Group();
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.13, 0.26), new THREE.MeshStandardMaterial({ color: 0x1f8ef1, flatShading: true }));
-    arm.position.set(0, -0.02, 0.08);
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xf1c27d, flatShading: true }));
-    hand.position.set(0, 0, -0.08);
-    this.toolMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.42), new THREE.MeshStandardMaterial({ color: 0x333333, flatShading: true, emissive: 0x000000 }));
-    this.toolMesh.position.set(0, 0.07, -0.2);
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.08), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    tip.position.set(0, 0, -0.24);
-    this.toolMesh.add(tip);
-    this.tip = tip;
-    this.view.add(arm, hand, this.toolMesh);
-    this.view.position.set(0.32, -0.28, -0.5);
-    this.view.scale.setScalar(0.26);
-    // always draw the viewmodel on top so it never clips into walls
-    [arm, hand, this.toolMesh, tip].forEach((m, i) => { m.renderOrder = 10 + i; m.frustumCulled = false; m.material.depthTest = false; m.material.depthWrite = false; });
-    G.camera.add(this.view);
     this.yaw = 0; this.pitch = -0.1;
     this.camMode = 1; // first person only
     this.camDist = 5.5;
@@ -76,7 +59,7 @@ export class Player {
     this.stun = 0;
   }
 
-  setToolColor(c) { this.toolMesh.material.color.set(c); this.toolMesh.material.emissive.set(c).multiplyScalar(0.3); this.tip.material.color.set(c).lerp(new THREE.Color(0xffffff), 0.5); }
+  setTool(id) { equipViewmodel(id); }
 
   update(dt, input) {
     const b = this.body;
@@ -94,7 +77,8 @@ export class Player {
     const pv = plat ? plat.velocity : { x: 0, y: 0, z: 0 };
     this.grounded = !!hit && b.velocity.y - pv.y < 6;
     if (this.grounded) this.airJumps = 1;
-    const swim = p.y < G.waterY + 0.4;
+    const wl = G.waterAt(p.x, p.z);
+    const swim = p.y < wl + 0.4;
     // move
     const mv = new THREE.Vector3();
     if (input.f) mv.add(fwdFlat);
@@ -103,6 +87,9 @@ export class Player {
     if (input.l) mv.sub(right);
     if (mv.lengthSq() > 0) mv.normalize();
     let speed = input.sprint ? 12 : 7;
+    // crouch: lower view, slow and steady
+    this.crouchT = (this.crouchT || 0) + (((input.crouch && !this.flying) ? 1 : 0) - (this.crouchT || 0)) * Math.min(1, dt * 12);
+    if (input.crouch && !this.flying) speed = 3.2;
     if (swim) speed = 4.5;
     if (this.flying) speed = input.sprint ? 30 : 16;
     this.stun = Math.max(0, this.stun - dt * (this.grounded ? 3 : 1));
@@ -123,7 +110,7 @@ export class Player {
       const vy = (input.jumpHeld ? 1 : 0) - (input.sprintDown ? 1 : 0);
       b.velocity.y = vy * 12;
     } else if (swim) {
-      b.velocity.y += (G.waterY + 0.1 - p.y) * 12 * dt;
+      b.velocity.y += (wl + 0.1 - p.y) * 12 * dt;
       b.velocity.y *= 1 - 1.5 * dt;
       if (input.jumpHeld) b.velocity.y = Math.max(b.velocity.y, 5);
     } else if (input.jump || (this.jumpBuf > 0 && this.grounded)) {
@@ -150,7 +137,7 @@ export class Player {
     // camera follows the physics-interpolated position (no stutter at high refresh rates)
     // with light vertical smoothing so contact jitter can never bob the view
     const ip = b.interpolatedPosition;
-    const ty = ip.y + 0.65;
+    const ty = ip.y + 0.65 - (this.crouchT || 0) * 0.55;
     if (this.camY === undefined || Math.abs(ty - this.camY) > 1.5) this.camY = ty;
     else this.camY += (ty - this.camY) * Math.min(1, dt * 22);
     const pivot = new THREE.Vector3(ip.x, this.camY, ip.z);
@@ -161,7 +148,7 @@ export class Player {
       cam = pivot.clone().addScaledVector(this.fwd, -this.camDist).addScaledVector(right, 0.8).add(new THREE.Vector3(0, 0.35, 0));
       const block = raycast(pivot, cam, GROUP.STATIC);
       if (block) cam = pivot.clone().lerp(block.point, Math.max(0, (block.dist - 0.3) / pivot.distanceTo(cam)));
-      if (p.y > G.waterY + 0.5) cam.y = Math.max(cam.y, G.waterY + 0.3);
+      if (p.y > wl + 0.5) cam.y = Math.max(cam.y, wl + 0.3);
     }
     if (G.shake > 0) {
       cam.add(new THREE.Vector3((Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4));
@@ -193,12 +180,7 @@ export class Player {
       const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), G.time * 10);
       this.meshes.torso.quaternion.multiply(q);
     }
-    // viewmodel: stays still (no bobbing). Only a small straight-back recoil and the bat swing.
-    this.kick = Math.max(0, (this.kick || 0) - dt * 4);
-    this.view.position.set(0.17, -0.135, -0.36 + this.kick * 0.04);
-    this.view.rotation.set(this.swing > 0 ? -Math.sin(this.swing * Math.PI) * 1.2 : 0, this.swing > 0 ? Math.sin(this.swing * Math.PI) * 0.8 : 0, 0);
-    // hand position used for beams / lines = the tool tip
-    G.camera.updateMatrixWorld();
-    this.tip.getWorldPosition(G.aim.hand);
+    // first-person hands + tool (no walk bobbing: only equip, recoil and swings)
+    updateViewmodel(dt, G.camera, this);
   }
 }

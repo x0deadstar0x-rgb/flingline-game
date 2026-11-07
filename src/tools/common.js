@@ -4,6 +4,7 @@ import * as CANNON from 'cannon-es';
 import { G, GROUP, raycast, clamp, tv } from '../core.js';
 import { damage, detonate } from '../items.js';
 import * as FX from '../fx.js';
+import { cubeBurst, terrainTopColor, carveTerrain } from '../terrain.js';
 
 export const AIM_MASK = GROUP.DYN | GROUP.STATIC;
 
@@ -33,7 +34,16 @@ export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
   const b = hit.body;
   const e = b.ent;
   FX.sparks(hit.point, hit.normal, color, 6, 5);
-  if (!e) { FX.debris(hit.point, 0x8a7a5a, 3, 0.08, 3); return; }
+  if (!e) {
+    if (hit.body && hit.body.isTerrain) {
+      // ground: little cubes of whatever it's made of + a dust puff; big shots chip a hole
+      const c = terrainTopColor(hit.point.x, hit.point.z);
+      cubeBurst(hit.point, dmg >= 60 ? 6 : 2, [c, 0x6b4f35], dmg >= 60 ? 6 : 3.5, dmg >= 60 ? 0.2 : 0.1);
+      FX.smoke(hit.point, 1, 0x9a8a6a, 0.25);
+      if (dmg >= 60 && G.crater) carveTerrain(hit.point, 0.7, { sink: 0.3 });
+    } else FX.debris(hit.point, 0x8a7a5a, 3, 0.08, 3);
+    return;
+  }
   const d = dummyOf(b);
   if (d) {
     // headshots hurt more
@@ -85,7 +95,7 @@ export function updateProjectiles(dt) {
     if (p.collide && p.onHit) {
       const h = raycast(_prev, p.pos, AIM_MASK);
       if (h) { p.onHit(h, p); done = true; }
-      else if (p.pos.y < G.waterY && p.water !== false) { p.onHit({ point: p.pos.clone().setY(G.waterY), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
+      else if (p.water !== false && p.pos.y < G.waterAt(p.pos.x, p.pos.z)) { p.onHit({ point: p.pos.clone().setY(G.waterAt(p.pos.x, p.pos.z)), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
     }
     if (!done && p.t >= p.life) { if (p.end) p.end(p.pos.clone(), p); done = true; }
     if (done) { if (p.mesh) G.scene.remove(p.mesh); G.projectiles.splice(i, 1); }

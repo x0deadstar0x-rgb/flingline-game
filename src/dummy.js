@@ -1,7 +1,7 @@
 // Dummies ("people"): walk around standing, turn into ragdolls when hit, get back up.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { G, GROUP, afterStep, later, rand, clamp, tv, popup, raycast, saveBest } from './core.js';
+import { G, GROUP, afterStep, later, rand, clamp, tv, popup, raycast, saveBest, drawPos, drawQuat } from './core.js';
 import { MAT } from './items.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
@@ -167,6 +167,11 @@ export class Dummy {
     }
   }
 
+  // feet position for drawing (smoothed between physics steps)
+  drawOrigin() {
+    if (this.state !== 'standing') return this.origin();
+    return tv(drawPos(this.body)).add(new THREE.Vector3(0, -0.95 * this.s, 0));
+  }
   origin() {
     if (this.state === 'standing') return tv(this.body.position).add(new THREE.Vector3(0, -0.95 * this.s, 0));
     return tv(this.parts.torso.body.position).add(new THREE.Vector3(0, -1.17 * this.s, 0));
@@ -389,7 +394,7 @@ export class Dummy {
     const h = this.home;
     let feet = new THREE.Vector3(h.x + rand(-1.5, 1.5), h.y + 0.5, h.z + rand(-1.5, 1.5));
     const g = raycast(feet.clone().setY(h.y + 30), feet.clone().setY(h.y - 30), GROUP.STATIC);
-    if (g && g.point.y > G.waterY) feet = g.point.add(new THREE.Vector3(0, 0.1, 0));
+    if (g && g.point.y > G.waterAt(g.point.x, g.point.z)) feet = g.point.add(new THREE.Vector3(0, 0.1, 0));
     else { const sp = G.spawn || new THREE.Vector3(0, 1, 0); feet = new THREE.Vector3(sp.x + rand(-8, 8), sp.y + 0.5, sp.z - rand(4, 12)); }
     if (this.state === 'ragdoll') this.clearRagdoll(); else if (this.body) G.world.removeBody(this.body);
     this.body = null;
@@ -421,7 +426,7 @@ export class Dummy {
 
   ignite() {
     if (this.burn > 0 || this.cfg.metal) return;
-    if (this.center().y < G.waterY) return;
+    { const c = this.center(); if (c.y < G.waterAt(c.x, c.z)) return; }
     this.burn = 7;
     sfx.oof(this.center(), this.pitch);
   }
@@ -430,7 +435,7 @@ export class Dummy {
     if (this.burn > 0) {
       this.burn -= dt;
       const c = this.center();
-      if (c.y < G.waterY + 0.3) { this.burn = 0; FX.smoke(c, 5, 0xdddddd, 0.6); }
+      if (c.y < G.waterAt(c.x, c.z) + 0.3) { this.burn = 0; FX.smoke(c, 5, 0xdddddd, 0.6); }
       if (Math.random() < 0.6) FX.particle({ pos: c.clone().add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.6, 0.6) * this.s, rand(-0.3, 0.3))), vel: new THREE.Vector3(rand(-0.5, 0.5), rand(2, 4), rand(-0.5, 0.5)), color: Math.random() < 0.5 ? 0xff7a1a : 0xffc04a, size: rand(0.2, 0.35) * this.s, life: rand(0.4, 0.7), glow: true, add: true, gravity: -2, floor: false });
       if (Math.random() < dt * 1.5) sfx.oof(c, this.pitch);
       this.damageHp(dt * 9);
@@ -488,7 +493,7 @@ export class Dummy {
       const fx = b.position.x + dir.x * dist * k, fz = b.position.z + dir.z * dist * k;
       const floor = raycast(new THREE.Vector3(fx, footY + 1.2 * s, fz), new THREE.Vector3(fx, footY - 1.6, fz), GROUP.STATIC | GROUP.DYN);
       if (!floor) return false;                            // edge / hole
-      if (floor.point.y < G.waterY + 0.15) return false;   // water
+      if (floor.point.y < G.waterAt(fx, fz) + 0.15) return false;   // water
       if (floor.point.y < footY - 1.1) return false;       // too big a drop
     }
     return true;
@@ -520,7 +525,7 @@ export class Dummy {
       const a = rand(0, Math.PI * 2), r = rand(5, 18);
       const x = clamp(o.x + Math.cos(a) * r, -wb, wb), z = clamp(o.z + Math.sin(a) * r, -wb, wb);
       const g = raycast(new THREE.Vector3(x, o.y + 6, z), new THREE.Vector3(x, o.y - 6, z), GROUP.STATIC);
-      if (g && g.point.y > G.waterY + 0.2 && g.normal.y > 0.7 && Math.abs(g.point.y - o.y) < 4) return g.point;
+      if (g && g.point.y > G.waterAt(x, z) + 0.2 && g.normal.y > 0.7 && Math.abs(g.point.y - o.y) < 4) return g.point;
     }
     return null;
   }
@@ -545,7 +550,7 @@ export class Dummy {
     const s = this.s;
     const ai = this.ai;
     const feet = this.origin();
-    if (feet.y < G.waterY - 0.4 || feet.y < (G.killY ?? -30)) { this.knock(null); return; }
+    if (feet.y < G.waterAt(feet.x, feet.z) - 0.4 || feet.y < (G.killY ?? -30)) { this.knock(null); return; }
     const ground = raycast(new THREE.Vector3(b.position.x, b.position.y - 0.6 * s, b.position.z), new THREE.Vector3(b.position.x, b.position.y - 1.15 * s, b.position.z));
     const grounded = !!ground;
     let speed = 0;
@@ -690,7 +695,7 @@ export class Dummy {
         if (ai.t <= 0) this.decide(feet, pp);
       }
       // say hi when you walk up to them
-      if (pp && ai.mode !== 'chat' && ai.mode !== 'wave' && G.time - ai.lastWave > 25) {
+      if (pp && (ai.mode === 'idle' || ai.mode === 'walk' || ai.mode === 'sit') && !ai.carry && G.time - ai.lastWave > 25) {
         const d = pp.distanceTo(feet);
         if (d < 7 && d > 2) {
           const look = G.aim.dir.dot(feet.clone().sub(pp).normalize());
@@ -727,7 +732,7 @@ export class Dummy {
     const hs = Math.hypot(b.velocity.x, b.velocity.z);
     this.moveAmt += (clamp(hs / 3, 0, 1) - this.moveAmt) * Math.min(1, 8 * dt);
     this.phase += dt * (3 + hs * 2.2) / Math.sqrt(s);
-    poseHumanoid(this.meshes, s, this.origin(), this.yaw, this.phase, this.moveAmt, pose);
+    poseHumanoid(this.meshes, s, this.drawOrigin(), this.yaw, this.phase, this.moveAmt, pose);
     if (ai.carry) this.holdCarry(pose.toss);
   }
 
@@ -842,6 +847,7 @@ export class Dummy {
   }
   pickUp(e) {
     const ai = this.ai;
+    if (ai.carry && ai.carry !== e) this.dropCarry();
     e.carriedBy = this;
     e.body.type = CANNON.Body.KINEMATIC;
     e.body.collisionResponse = false;
@@ -854,7 +860,7 @@ export class Dummy {
     if (!e || e.dead) { this.ai.carry = null; return; }
     const hh = (e.def.size ? e.def.size[1] / 2 : e.def.r || 0.5) * e.scale;
     const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const p = this.origin().add(new THREE.Vector3(0, 2.2 * this.s + hh, 0));
+    const p = this.drawOrigin().add(new THREE.Vector3(0, 2.2 * this.s + hh, 0));
     if (toss !== undefined) p.addScaledVector(fwd, toss * 0.6 * this.s).y -= toss * 0.5 * this.s;
     e.body.position.set(p.x, p.y, p.z);
     e.body.velocity.set(this.body.velocity.x, 0, this.body.velocity.z);
@@ -936,7 +942,7 @@ export class Dummy {
   }
 
   updateRagdoll(dt) {
-    for (const n of PARTS) { const e = this.parts[n]; e.mesh.position.copy(e.body.position); e.mesh.quaternion.copy(e.body.quaternion); }
+    for (const n of PARTS) { const e = this.parts[n]; e.mesh.position.copy(drawPos(e.body)); e.mesh.quaternion.copy(drawQuat(e.body)); }
     const t = this.parts.torso.body;
     if (this.frozen > 0) { this.frozen -= dt; if (this.frozen <= 0) this.unfreeze(); }
     if (this.flingStart) {
@@ -947,9 +953,9 @@ export class Dummy {
     const sp = t.velocity.length();
     const held = G.grab && G.grab.dummy === this;
     const tied = G.ropes.some((r) => PARTS.some((n) => r.a === this.parts[n].body || r.b === this.parts[n].body));
-    const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length);
+    const busy = held || tied || this.frozen > 0 || this.parts.torso.antigrav > 0 || PARTS.some((n) => this.parts[n].thrusters.length || this.parts[n].anchored);
     if (sp < 0.9 && !busy) this.still += dt; else this.still = 0;
-    const inWater = t.position.y < G.waterY + 0.2;
+    const inWater = t.position.y < G.waterAt(t.position.x, t.position.z) + 0.2;
     if (held && this.deadT <= 0 && this.ko <= 0) {
       // being held: kick and wave the arms and legs about
       for (const n of ['armL', 'armR', 'legL', 'legR']) {

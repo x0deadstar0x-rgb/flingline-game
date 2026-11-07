@@ -44,10 +44,11 @@ export const gunTools = [
       this.spin = Math.min(1, this.spin + dt * 2.5);
       if (this.spin < 0.6) { sfx.whir(this.spin); return; }
       this.acc = (this.acc || 0) + dt;
-      while (this.acc > 0.045) { this.acc -= 0.045; sfx.minigun(); shoot(spreadDir(G.aim.dir, 0.03), 150, 7, 2.2, 0xfff1a8, 0.03, 0.05); }
+      while (this.acc > 0.045) { this.acc -= 0.045; sfx.minigun(); shoot(spreadDir(G.aim.dir, 0.03), 150, 7, 2.2, 0xfff1a8, 0.03, 0.05); if (G.recoil) G.recoil(0.45); }
       G.shake = Math.max(G.shake, 0.08);
     },
-    update(dt, input) { if (!input.mouseDown) this.spin = Math.max(0, this.spin - dt * 2); },
+    update(dt, input) { if (!input.mouseDown) this.spin = Math.max(0, this.spin - dt * 2); G.toolSpin = this.spin; },
+    unequip() { G.toolSpin = 0; },
   },
   {
     id: 'sniper', name: 'Railgun', icon: '🎯', color: 0x9ad9ff, hint: 'Click: piercing shot through up to 6 things',
