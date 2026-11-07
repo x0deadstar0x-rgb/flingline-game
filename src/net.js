@@ -312,6 +312,9 @@ function runEvent(ev, catchup) {
   if (ab) ab.collisionFilterGroup = 0;
   const by = G.actionBy;
   // (people it hurts blame them: not for what they did before you were even here)
+  // (their recoil and spin are theirs: keep your own view as it was)
+  const myRecoil = G.recoil, mySpin = G.toolSpin;
+  G.recoil = null;
   G.netRemote = true; G.netFrom = ev.from; G.netAvatar = ab; G.actionBy = catchup ? null : ev.from;
   G.netEvent = { base: ev.k, n: 0 };
   try {
@@ -324,6 +327,7 @@ function runEvent(ev, catchup) {
   finally {
     if (ab) ab.collisionFilterGroup = abGroup;
     G.netRemote = false; G.netEvent = null; G.netFrom = null; G.netAvatar = null; G.actionBy = by;
+    G.recoil = myRecoil; G.toolSpin = mySpin;
     for (const k of SAVE) { const s = save.toolState[k]; if (s) tool[k] = s.v; else delete tool[k]; }
     aim.start = save.start; aim.dir.copy(save.dir); aim.hand.copy(save.hand); aim.origin.copy(save.origin);
     G.player = save.player; G.spawnId = save.spawnId;
