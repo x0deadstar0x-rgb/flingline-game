@@ -70,6 +70,7 @@ export function clearTerrain() { T = null; G.terrain = null; G.waterAt = noWater
 // A patch of ground only gets its physics when something needs it: a moving thing near it or a
 // ray passing over it. Big maps load fast and only the busy parts cost anything.
 export function ensureGround(xa, za, xb, zb) {
+  if (G.ensureBuildings) G.ensureBuildings(xa, za, xb, zb);
   if (!T) return;
   const s = PC * V;
   const ia = Math.max(0, Math.floor((Math.min(xa, xb) - T.x0) / s)), ib = Math.min(T.pnc - 1, Math.floor((Math.max(xa, xb) - T.x0) / s));

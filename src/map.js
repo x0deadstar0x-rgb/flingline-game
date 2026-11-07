@@ -10,7 +10,8 @@ import { sfx } from './audio.js';
 import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater, addGridStatic } from './terrain.js';
 import { setBuildingGroup, clearBuildings } from './buildings.js';
 import { addPool, clearPools, updatePools } from './liquids.js';
-import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT } from './city.js';
+import { planCity, buildCityBlocks, lotAt, PITCH, ROAD, WALK, LOT, makeBuilding } from './city.js';
+import { castle, pyramid, colosseum, lighthouse, greatWall, millTower } from './landmarks.js';
 
 let mapGroup = null;
 let mapBodies = [];
@@ -69,19 +70,45 @@ function deco(mesh, x, y, z) { mesh.position.set(x, y, z); mapGroup.add(mesh); r
 
 let snowyTrees = false;
 const leafCols = [0x3f8f3a, 0x4fa34a, 0x2f7a32, 0x5cb85c];
+// every tree on the map (a nuke or a super black hole can blow them away)
+G.trees = [];
 function tree(x, y, z, s = 1) {
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.32 * s, 2.2 * s, 6), smat(0x7a5230));
   trunk.castShadow = true;
-  addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, trunk);
+  const b1 = addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, trunk);
   const c = snowyTrees ? 0xeef4f8 : leafCols[(r01() * leafCols.length) | 0];
+  const meshes = [trunk];
   for (let i = 0; i < 3; i++) {
     const cone = new THREE.Mesh(new THREE.ConeGeometry((1.6 - i * 0.4) * s, 1.6 * s, 7), smat(c));
     cone.castShadow = true;
     cone.rotation.y = r01() * 3;
     deco(cone, x, y + (2.2 + i * 0.9) * s, z);
+    meshes.push(cone);
   }
-  addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+  const b2 = addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+  G.trees.push({ x, y, z, s, meshes, bodies: [b1, b2] });
 }
+// knock down the trees within r of (x, z): they vanish and a couple of logs go flying
+export function blowTrees(x, z, r, from = null, power = 20) {
+  if (!G.trees.length) return 0;
+  let n = 0;
+  for (let i = G.trees.length - 1; i >= 0; i--) {
+    const t = G.trees[i];
+    const d = Math.hypot(t.x - x, t.z - z);
+    if (d > r) continue;
+    G.trees.splice(i, 1); n++;
+    for (const m of t.meshes || []) m.removeFromParent();
+    if (t.inst) for (const [im, k] of t.inst) { im.setMatrixAt(k, _zeroM); im.instanceMatrix.needsUpdate = true; }
+    for (const b of t.bodies) { G.world.removeBody(b); const j = mapBodies.indexOf(b); if (j >= 0) mapBodies.splice(j, 1); b.aabb.lowerBound.set(1e9, 1e9, 1e9); b.aabb.upperBound.set(1e9, 1e9, 1e9); }
+    if (n <= 24) {
+      const dir = new THREE.Vector3(t.x - (from ? from.x : x), 0.6, t.z - (from ? from.z : z)).normalize().multiplyScalar(power * (1 - d / r) + 4);
+      createEnt(ITEMS.log, new THREE.Vector3(t.x, t.y + 1.5 * t.s, t.z), { spawned: true, gen: 1, vel: dir, angVel: new THREE.Vector3(rand(-3, 3), rand(-3, 3), rand(-3, 3)) });
+    }
+  }
+  return n;
+}
+G.blowTrees = blowTrees;
+const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
 // lots of trees at once (big maps): a few instanced meshes for all of them, a collider each
 const trunkGeoI = new THREE.CylinderGeometry(0.22, 0.32, 2.2, 6), coneGeoI = new THREE.ConeGeometry(1, 1, 7);
 function forest(list, colors = null) {
@@ -90,12 +117,16 @@ function forest(list, colors = null) {
   const trunks = new THREE.InstancedMesh(trunkGeoI, smat(0x7a5230), list.length);
   const per = cols.map(() => []);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const recs = [];
   list.forEach(([x, y, z, s], n) => {
     trunks.setMatrixAt(n, m4.compose(new THREE.Vector3(x, y + 1.1 * s, z), q.identity(), new THREE.Vector3(s, s, s)));
     const ci = (r01() * cols.length) | 0;
-    for (let i = 0; i < 3; i++) per[ci].push(m4.clone().compose(new THREE.Vector3(x, y + (2.2 + i * 0.9) * s, z), q.setFromEuler(e.set(0, r01() * 3, 0)), new THREE.Vector3((1.6 - i * 0.4) * s, 1.6 * s, (1.6 - i * 0.4) * s)));
-    addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, null);
-    addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null);
+    const rec = { x, y, z, s, inst: [[trunks, n]], bodies: [], ci, cones: [] };
+    for (let i = 0; i < 3; i++) { rec.cones.push(per[ci].length); per[ci].push(m4.clone().compose(new THREE.Vector3(x, y + (2.2 + i * 0.9) * s, z), q.setFromEuler(e.set(0, r01() * 3, 0)), new THREE.Vector3((1.6 - i * 0.4) * s, 1.6 * s, (1.6 - i * 0.4) * s))); }
+    rec.bodies.push(addStatic(new CANNON.Cylinder(0.3 * s, 0.3 * s, 2.2 * s, 6), new THREE.Vector3(x, y + 1.1 * s, z), null, null));
+    rec.bodies.push(addStatic(new CANNON.Sphere(1.3 * s), new THREE.Vector3(x, y + 3 * s, z), null, null));
+    recs.push(rec);
+    G.trees.push(rec);
   });
   for (const m of [trunks]) { m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; mapGroup.add(m); }
   per.forEach((mats, ci) => {
@@ -104,6 +135,7 @@ function forest(list, colors = null) {
     mats.forEach((mm, k) => im.setMatrixAt(k, mm));
     im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
     mapGroup.add(im);
+    for (const rec of recs) if (rec.ci === ci) for (const k of rec.cones) rec.inst.push([im, k]);
   });
 }
 function rock(x, y, z, r = 1) {
@@ -536,6 +568,21 @@ function ridged(x, z) { let s = 0, a = 0.5, f = 1; for (let k = 0; k < 5; k++) {
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const WORLD_HALF = 360;
 const VOLCANO = [-215, 225], ACID = [-235, 40, 34], DESERT_X = 150, MEADOW = [0, 40];
+const RIVER = [[-55, -122], [-50, -80], [-70, -10], [-56, 60], [-40, 140], [-58, 228], [-60, 320]];
+const DOWNTOWN = { x0: 46, x1: 156, z0: -70, z1: 8, y: 3 };
+const TOWNLOTS = [[66, -48, 24, 22, 'glass'], [100, -48, 22, 22, 'modern'], [134, -48, 22, 24, 'office'], [66, -14, 22, 22, 'deco'], [100, -14, 24, 24, 'glass'], [134, -14, 22, 22, 'brick']];
+const TRACK = [-112, 122, 48, 30], CASTLE = [-132, -78], COLOSSEUM = [92, 150], PYRAMID = [262, 128], LIGHT = [150, 262];
+function riverDist(x, z) {
+  let best = 1e9, bx = 0;
+  for (let i = 0; i < RIVER.length - 1; i++) {
+    const [ax, az] = RIVER[i], [cx, cz] = RIVER[i + 1];
+    const dx = cx - ax, dz = cz - az, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+    const d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+    if (d < best) { best = d; bx = ax + dx * t; }
+  }
+  return best;
+}
+function inLot(x, z) { for (const [cx, cz, w, d] of TOWNLOTS) if (Math.abs(x - cx) < w / 2 + 0.01 && Math.abs(z - cz) < d / 2 + 0.01) return true; return false; }
 function worldHeight(x, z) {
   // rolling meadows and hills everywhere
   let h = 2 + 10 * (fbm(x * 0.0055, z * 0.0055) - 0.45) + 3 * (fbm(x * 0.02, z * 0.02, 3) - 0.5);
@@ -563,6 +610,22 @@ function worldHeight(x, z) {
   if (sea > 0) h = h * (1 - sea) + sea * -12;
   const dh = Math.hypot(x - 150, z - 262);
   if (dh < 40) h = Math.max(h, 22 * Math.pow(1 - dh / 40, 0.7) - 2);
+  // flat places for big things
+  const flat = (cx, cz, r, edge, y) => { const d = Math.hypot(x - cx, z - cz); if (d < r + edge) { const k = sstep(r + edge, r, d); h = h * (1 - k) + y * k; } };
+  flat(TRACK[0], TRACK[1], 54, 14, 2.5);
+  flat(COLOSSEUM[0], COLOSSEUM[1], 36, 12, 2.5);
+  flat(PYRAMID[0], PYRAMID[1], 30, 10, 2.5);
+  const dc = Math.hypot(x - CASTLE[0], z - CASTLE[1]);
+  if (dc < 44) h = Math.max(h, dc < 28 ? 16 : 16 * Math.pow((44 - dc) / 16, 0.8)); // the castle's hill
+  // downtown: a flat plateau (the lots a block lower so the floors are flush)
+  if (x > DOWNTOWN.x0 - 14 && x < DOWNTOWN.x1 + 14 && z > DOWNTOWN.z0 - 14 && z < DOWNTOWN.z1 + 14) {
+    const ox = Math.max(0, DOWNTOWN.x0 - x, x - DOWNTOWN.x1), oz = Math.max(0, DOWNTOWN.z0 - z, z - DOWNTOWN.z1);
+    const k = sstep(14, 0, Math.hypot(ox, oz));
+    h = h * (1 - k) + (inLot(x, z) ? DOWNTOWN.y - 0.5 : DOWNTOWN.y) * k;
+  }
+  // the river: from a waterfall at the foot of the mountains down to the sea
+  const rd = riverDist(x, z);
+  if (rd < 12 && z > -126) h = Math.min(h, -2.6 + Math.pow(rd / 7, 2) * 3.4);
   // the edges (except the sea) rise into hills so you can't fall off
   const ex = Math.abs(x), ez = -z;
   if (ex > WORLD_HALF - 30) h += (ex - (WORLD_HALF - 30)) * 1.5;
@@ -570,6 +633,10 @@ function worldHeight(x, z) {
   return h;
 }
 function worldColor(h, x, z) {
+  if (x > DOWNTOWN.x0 - 2 && x < DOWNTOWN.x1 + 2 && z > DOWNTOWN.z0 - 2 && z < DOWNTOWN.z1 + 2) return inLot(x, z) ? 0x8a8a84 : ((Math.floor(x / 2) + Math.floor(z / 2)) & 1 ? 0x3a3d42 : 0x34373c);
+  const te = Math.hypot((x - TRACK[0]) / TRACK[2], (z - TRACK[1]) / TRACK[3]);
+  if (te > 0.8 && te < 1.0) return te < 0.815 || te > 0.985 ? ((Math.floor(Math.atan2(z - TRACK[1], x - TRACK[0]) * 12) & 1) ? 0xd62828 : 0xf2f2f2) : 0x3a3d42;
+  if (riverDist(x, z) < 9 && h < 3) return 0xc9b27a;
   const dv = Math.hypot(x - VOLCANO[0], z - VOLCANO[1]);
   if (dv < 125 && h > 4) return h > 70 ? 0x2e2b29 : 0x3d3a38;                 // volcano rock and ash
   if (Math.hypot(x - ACID[0], z - ACID[1]) < ACID[2] + 22) return h < -1 ? 0x4a5a2a : 0x5b6b3a; // swamp
@@ -584,6 +651,7 @@ function worldColor(h, x, z) {
 }
 function buildWorld() {
   srand(101);
+  G.lazyBuildings = true;
   const gh = worldHeight;
   makeTerrain({
     W: WORLD_HALF * 2, es: 3, bedrock: -40, height: worldHeight, color: worldColor, stream: true, near: 135, spawn: [MEADOW[0], 0, MEADOW[1]],
@@ -666,8 +734,53 @@ function buildWorld() {
   for (let i = 0; i < 9; i++) for (const s of [-1.3, 1.3]) sbox(0.3, 4, 0.3, s, -1.6, 248 + i * 4, 0x6e4626);
   // bunker hatch ring
   scyl(2.4, 0.4, 230, gh(230, 60) + 0.2, 60, 0x5a6066);
+  // ---- landmarks (all destructible blocks)
+  setBuildingGroup(mapGroup);
+  castle(CASTLE[0], CASTLE[1], gh);
+  pyramid(PYRAMID[0], PYRAMID[1], gh);
+  colosseum(COLOSSEUM[0], COLOSSEUM[1], gh);
+  lighthouse(LIGHT[0], LIGHT[1] - 6, gh);
+  greatWall(-200, -76, -106, -170, gh); greatWall(-34, 200, -106, 0, gh); // (the river runs through the gap)
+  for (const [x, z] of [[32, 108], [-8, 150], [54, 168]]) {
+    millTower(x, z, gh);
+    const hub = new THREE.Group();
+    hub.position.set(x, gh(x, z) + 12.4, z + 2.8);
+    for (let i = 0; i < 4; i++) { const blade = new THREE.Mesh(new THREE.BoxGeometry(0.9, 7, 0.15), smat(0xf2ece0)); blade.position.y = 3.6; const arm = new THREE.Group(); arm.rotation.z = i * Math.PI / 2; arm.add(blade); hub.add(arm); }
+    mapGroup.add(hub);
+    G.spinners.push({ obj: hub, speed: 0.9 });
+  }
+  // downtown: six towers
+  for (const [cx, cz, w, d, style] of TOWNLOTS) makeBuilding({ cx, cz, w, d, floors: 9 + Math.floor(r01() * 14), style, rng: r01, y0: DOWNTOWN.y - 0.5, setbacks: style === 'deco' ? [[0.5, 4]] : [], antenna: r01() < 0.4 ? 20 : 0 });
+  sleepy(() => { for (let i = 0; i < 6; i++) put('car', DOWNTOWN.x0 + 6 + i * 18, DOWNTOWN.y + 0.3, -31, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2) }); for (let i = 0; i < 6; i++) put('lamp', DOWNTOWN.x0 + 3 + i * 20, DOWNTOWN.y, -31 + (i % 2 ? 5 : -5)); });
+  // a bridge over the river on the way west
+  const bz = 40, bx = -59;
+  sbox(24, 0.6, 5, bx, 3.4, bz, 0x8a6a46, 'plank', null, 3);
+  for (const s of [-1, 1]) { sbox(24, 0.8, 0.3, bx, 4.1, bz + s * 2.4, 0x6e4626, 'plank'); for (let i = 0; i < 5; i++) sbox(0.5, 5, 0.5, bx - 10 + i * 5, 0.9, bz + s * 2.2, 0x7d7a72, 'stone'); }
+  // the waterfall at the top of the river
+  const wtop = gh(-55, -128) + 1;
+  const fall = new THREE.Mesh(new THREE.BoxGeometry(11, wtop + 1, 1.2), new THREE.MeshStandardMaterial({ color: 0x9fd8ff, emissive: 0x2a6fa8, emissiveIntensity: 0.35, transparent: true, opacity: 0.62, roughness: 0.1 }));
+  deco(fall, -55, (wtop - 1) / 2, -124);
+  G.waterfall = { x: -55, z: -122, y: -1 };
+  // the race track: ramps and karts on the start line
+  sbox(7, 0.5, 12, TRACK[0] + TRACK[2] * 0.9, 1.6, TRACK[1], 0xffbe0b, null, [0.22, 0, 0]);
+  sbox(7, 0.5, 12, TRACK[0] - TRACK[2] * 0.9, 1.6, TRACK[1], 0x3a86ff, null, [-0.22, 0, 0]);
+  sleepy(() => { for (let i = 0; i < 3; i++) put('kart', TRACK[0] + 4 + i * 2.6, 2.8, TRACK[1] + TRACK[3] * 0.9, { quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI) }); put('truck', TRACK[0] - 8, 3.1, TRACK[1] + TRACK[3] * 0.9); });
+  // a chain of floating islands rising towards the mountains, with pads from one to the next
+  const isl = [[SI[0], SI[1], SY], [-5, -55, gh(-5, -55) + 98], [35, -95, gh(35, -95) + 118], [75, -135, Math.max(gh(75, -135) + 40, 175)]];
+  for (let n = 1; n < isl.length; n++) {
+    const [x, z, y] = isl[n];
+    sbox(16, 2, 16, x, y, z, 0x5fae4a, 'grass', null, 3); sbox(10, 3, 10, x, y - 2.4, z, 0x7d6a54); sbox(5, 3, 5, x, y - 5, z, 0x6b5a46);
+    tree(x + 4, y + 1, z + 4, 1);
+  }
+  for (let n = 0; n < isl.length - 1; n++) {
+    const [ax, az, ay] = isl[n], [bx2, bz2, by] = isl[n + 1];
+    const px = ax + (bx2 - ax) * 0.18, pz = az + (bz2 - az) * 0.18, t = 3.2;
+    const vx = (bx2 - px) / t, vz = (bz2 - pz) / t, vy = (by + 1.5 - (ay + 1.2) + 0.5 * 9.82 * t * t) / t;
+    pad(px, ay + 1, pz, new THREE.Vector3(vx, vy, vz), 0xb98cff);
+  }
+  sleepy(() => { for (let i = 0; i < 4; i++) put('gold', isl[3][0] + rr(-3, 3), isl[3][2] + 1.3, isl[3][1] + rr(-3, 3)); put('crystal', isl[3][0], isl[3][2] + 1.6, isl[3][1]); });
   // ---- people
-  crowd(10, 0, 40, 18, 3.1); crowd(4, 0, 238, 20, gh(0, 238) + 0.1); crowd(3, 240, 0, 10, gh(240, 0) + 0.1); crowd(2, 230, -110, 8, gh(230, -110) + 0.1);
+  crowd(10, 0, 40, 18, 3.1); crowd(6, 100, -31, 16, DOWNTOWN.y + 0.1); crowd(4, COLOSSEUM[0], COLOSSEUM[1], 8, 2.6); crowd(4, 0, 238, 20, gh(0, 238) + 0.1); crowd(3, 240, 0, 10, gh(240, 0) + 0.1); crowd(2, 230, -110, 8, gh(230, -110) + 0.1);
   crowd(2, -235, 80, 6, gh(-235, 80) + 0.1, ['zombie']);
 }
 
@@ -880,7 +993,7 @@ function buildPlayground() {
 export const MAPS = [
   { id: 'island', name: 'Island', icon: '🏝️', desc: 'Castle, towers, TNT bunker, beaches & ocean', build: buildIsland, spawn: [0, 1.2, 34], sky: [0x4aa3ff, 0xcfe9ff], fog: [0xcfe9ff, 90, 320], killY: -30, water: -1, walk: 58 },
   { id: 'city', name: 'City', icon: '🏙️', desc: 'Huge towers made of blocks: climb the stairs to the roof, blow out the windows, bring them down', build: buildCity, spawn: [0, 1.2, 12], sky: [0x8fb3d9, 0xe8eef5], fog: [0xe8eef5, 110, 420], killY: -30, water: -1000, walk: 118 },
-  { id: 'world', name: 'Mega World', icon: '🌍', desc: 'HUGE: mountains with a crystal cavern, snowfields, a desert with a buried bunker, a beach and sea cave, a forest with an acid swamp, a volcano, a sky island… room for everyone', build: buildWorld, spawn: [MEADOW[0], worldHeight(MEADOW[0], MEADOW[1]) + 2.5, MEADOW[1]], sky: [0x5ea6ff, 0xe3eefc], fog: [0xe3eefc, 170, 700], killY: -40, water: -1, walk: 330 },
+  { id: 'world', name: 'Mega World', icon: '🌍', desc: 'HUGE: a castle on a hill, a downtown of towers, a colosseum, a pyramid with a hidden chamber, a great wall, a river with a waterfall, a race track, windmills, a lighthouse, a chain of sky islands, mountains with a crystal cavern, a volcano, an acid swamp, beach, desert, snow… room for everyone', build: buildWorld, spawn: [MEADOW[0], worldHeight(MEADOW[0], MEADOW[1]) + 2.5, MEADOW[1]], sky: [0x5ea6ff, 0xe3eefc], fog: [0xe3eefc, 170, 700], killY: -40, water: -1, walk: 330 },
   { id: 'caves', name: 'Caves', icon: '🦇', desc: 'A mountain full of caves: a great hall, a crystal grotto, an underground lake, a lava chasm, old mine tunnels, a skylight… and secrets', build: buildCaves, spawn: [0, 2.4, 110], sky: [0x6d8fb8, 0xd9c7a8], fog: [0xd9c7a8, 90, 330], killY: -60, water: -1000, walk: 100 },
   { id: 'flat', name: 'Flatlands', icon: '🟩', desc: 'Huge flat field: stunt ramps, sky platforms, ball pit', build: buildFlat, spawn: [0, 1.2, 34], sky: [0x5bb1ff, 0xe6f4ff], fog: [0xe6f4ff, 120, 450], killY: -40, water: -1000, walk: 140 },
   { id: 'hills', name: 'Hills', icon: '⛰️', desc: 'Big rolling hills, a lake, a castle hill & boulders to roll', build: buildHills, spawn: [0, 6, 50], sky: [0x7fb8ff, 0xffe8cc], fog: [0xffe8cc, 100, 360], killY: -30, water: -1, walk: 110 },
@@ -927,7 +1040,7 @@ export function loadMap(id) {
   G.waterAt = () => -Infinity;
   skyDome(m.sky[0], m.sky[1]);
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
-  G.mapBuilding = true; G.mapNid = 0; G.entByNid = new Map();
+  G.mapBuilding = true; G.mapNid = 0; G.entByNid = new Map(); G.trees = []; G.spinners = []; G.waterfall = null; G.lazyBuildings = false;
   m.build();
   if (m.id !== 'sky') makeClouds(18, 70, 300);
   applyTime(G.settings ? G.settings.time : 'day');
@@ -999,6 +1112,11 @@ export function updateMap(dt) {
   updateTerrain();
   updateCubes(dt);
   updatePools(dt);
+  if (G.spinners) for (const sp of G.spinners) sp.obj.rotation.z += sp.speed * dt;
+  if (G.waterfall && G.camera && G.camera.position.distanceTo(new THREE.Vector3(G.waterfall.x, G.camera.position.y, G.waterfall.z)) < 110 && Math.random() < 0.7) {
+    const w = G.waterfall;
+    FX.particle({ pos: new THREE.Vector3(w.x + rand(-5, 5), w.y + 0.3, w.z + rand(-1, 1)), vel: new THREE.Vector3(rand(-2, 2), rand(1, 4), rand(0, 3)), color: 0xffffff, size: rand(0.6, 1.4), life: 1.2, gravity: 1, drag: 1, grow: 1, shrink: false, opacity: 0.6, floor: false });
+  }
   if (water) {
     const p = water.geometry.attributes.position;
     const t = G.time;

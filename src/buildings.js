@@ -770,14 +770,17 @@ function extract(grid, r) {
   return { grid: { vox: lv, nx: lx, ny: ly, nz: lz }, ci: i0 - r[0], cj: j0 - r[1], ck: k0 - r[2], com: new THREE.Vector3(sx / n * BV, sy / n * BV, sz / n * BV), n };
 }
 
+const dist2 = (b, p) => (b.x0 + b.nx * BV / 2 - p.x) ** 2 + (b.z0 + b.nz * BV / 2 - p.z) ** 2;
 // ---------------------------------------------------------------- every frame
 export function updateBuildings(dt) {
   for (const b of buildings) {
     if (b.checkAt > 0 && G.time >= b.checkAt) checkIntegrity(b);
   }
-  // redraw changed bands (a few per frame)
+  // redraw changed bands (a few per frame, the nearest buildings first)
   let budget = 6;
-  for (const b of buildings) {
+  const cam = G.camera ? G.camera.position : null;
+  const order = cam && buildings.length > 1 ? [...buildings].sort((a, c) => dist2(a, cam) - dist2(c, cam)) : buildings;
+  for (const b of order) {
     if (budget <= 0) break;
     for (let bi = 0; bi < b.nb && budget > 0; bi++) if (b.bands[bi].meshDirty) { rebuildMesh(b, bi); budget--; }
   }
@@ -814,9 +817,21 @@ export function finishBuilding(b) {
   for (let j = 1; j < b.ny; j++) b.ratio0[j] = L.W[j] > 0 ? L.S[j] / L.W[j] : 0;
   buildings.push(b);
   register(b);
-  for (let bi = 0; bi < b.nb; bi++) { rebuildPhysics(b, bi); rebuildMesh(b, bi); }
+  // big maps: physics only when something comes near, drawing streams in nearest first
+  if (G.lazyBuildings) { b.lazy = true; for (const band of b.bands) { band.physDirty = true; band.meshDirty = true; } }
+  else for (let bi = 0; bi < b.nb; bi++) { rebuildPhysics(b, bi); rebuildMesh(b, bi); }
   return b;
 }
+// make sure buildings in this area have their physics (called before physics steps and rays)
+export function ensureBuildings(xa, za, xb, zb) {
+  if (!buildings.length) return;
+  eachNear(Math.min(xa, xb), Math.min(za, zb), Math.max(xa, xb), Math.max(za, zb), (b) => {
+    if (!b.lazy) return;
+    b.lazy = false;
+    for (let bi = 0; bi < b.nb; bi++) if (b.bands[bi].physDirty) rebuildPhysics(b, bi);
+  });
+}
+G.ensureBuildings = ensureBuildings;
 export function setBuildingGroup(g) { group = g; }
 export function clearBuildings() {
   for (const b of buildings) for (const band of b.bands) {
