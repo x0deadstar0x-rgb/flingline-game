@@ -32,8 +32,8 @@
   body.light .slot .i.ti { filter: invert(1) !important; } body.light .slot.on .i.ti { filter: none !important; }
 
   /* ---------- start screen */
-  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: flex-start; padding: 0 max(4vw, 18px); overflow-y: auto; background: linear-gradient(90deg, rgba(5,5,5,0.94) 0%, rgba(5,5,5,0.82) 42%, rgba(5,5,5,0.25) 75%, rgba(5,5,5,0.05) 100%); cursor: pointer; }
-  #start .box { width: min(640px, 92vw); padding: 28px 0; }
+  #start { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start; justify-content: flex-start; padding: 0 max(4vw, 18px); overflow-y: auto; background: linear-gradient(90deg, rgba(5,5,5,0.94) 0%, rgba(5,5,5,0.82) 42%, rgba(5,5,5,0.25) 75%, rgba(5,5,5,0.05) 100%); cursor: pointer; }
+  #start .box { width: min(640px, 92vw); padding: 28px 0; margin: auto 0; } /* (centred when it fits, scrolls when it doesn't) */
   #start .eyebrow { font: 600 12px var(--mono); letter-spacing: 4px; color: #ff8a3c; }
   #start h1 { font-size: clamp(56px, 10vw, 112px); margin: 6px 0 0; font-weight: 900; letter-spacing: -3px; line-height: 0.95; text-shadow: 0 6px 40px rgba(255,120,40,0.25); }
   #start h1 span { -webkit-text-stroke: 2px #fff; color: transparent; }
