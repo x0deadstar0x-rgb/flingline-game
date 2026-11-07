@@ -83,6 +83,18 @@
   #toast { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); background: #000; color: #fff; border: 1px solid #fff; padding: 9px 16px; font: 700 12px var(--mono); letter-spacing: 1.5px; text-transform: uppercase; opacity: 0; transition: opacity .2s; z-index: 7; pointer-events: none; }
   #popups { position: fixed; inset: 0; pointer-events: none; z-index: 6; overflow: hidden; }
   .popup { position: absolute; left: 0; top: 0; font-weight: 900; white-space: nowrap; letter-spacing: 1px; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.6); }
+  .nametag { background: rgba(20,24,32,0.72); color: #fff; font-weight: 700; }
+  .nametag::after { display: none; }
+  .online .ocol { display: inline-block; vertical-align: top; width: 46%; min-width: 240px; margin: 0 2% 14px 0; }
+  .online label { display: block; margin: 8px 0; font-size: 13px; }
+  .online input[type=text] { display: block; width: 100%; margin-top: 4px; padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.25); color: inherit; font: inherit; }
+  .online .chk input { margin-right: 6px; }
+  .online button { padding: 8px 16px; border-radius: 9px; border: 0; background: #3a86ff; color: #fff; font-weight: 700; cursor: pointer; margin-top: 6px; }
+  .online button.danger { background: #d62828; }
+  .online .roomcode { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+  .online .roomcode b { font-size: 34px; letter-spacing: 6px; }
+  .online .plist { margin: 6px 0 12px 18px; }
+  .online .status { opacity: 0.85; min-height: 1.2em; }
   .bubble { position: fixed; left: 0; top: 0; pointer-events: none; background: rgba(255,255,255,0.94); color: #1d2430; font: 600 13px system-ui, sans-serif; padding: 4px 9px; border-radius: 10px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.25); z-index: 5; }
   .bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-top-color: rgba(255,255,255,0.94); border-bottom: 0; }
   #whiteflash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 30; transition: opacity 1.2s; }
@@ -252,6 +264,7 @@
       <button data-tab="tools">Tools</button>
       <button data-tab="items">Spawn</button>
       <button data-tab="maps">Maps</button>
+      <button data-tab="online">Online</button>
       <button data-tab="profile">Profile</button>
       <button data-tab="settings">Settings</button>
       <button data-tab="controls">Controls</button>

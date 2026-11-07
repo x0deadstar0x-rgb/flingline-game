@@ -10,6 +10,7 @@ import { thumb } from './thumbs.js';
 import { getP, setP, listProfiles, activeProfile, createProfile, renameProfile, switchProfile, deleteProfile } from './store.js';
 import { profileLook, setProfileLook, HATS, SKIN_COLORS, CLOTH_COLORS } from './look.js';
 import { bindText, ACTIONS, PRESETS, binds, ctl, applyPreset, setBind, keyName, captureNext, saveControls } from './input.js';
+import { net, hostRoom, joinRoom, leaveRoom } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -167,6 +168,41 @@ function renderSettings(body) {
 
 // Profile: who's playing, how you look, your stats
 let newProfile = false;
+// ---- multiplayer rooms
+function renderOnline(body) {
+  const w = document.createElement('div');
+  w.className = 'settings online';
+  body.appendChild(w);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  if (net.active) {
+    const players = [`<li><b>${esc(activeProfile().name)}</b> (you${net.host ? ', host' : ''})</li>`, ...[...net.players.values()].map((p) => `<li>${esc(p.name)}</li>`)];
+    w.innerHTML = `
+      <div class="roomcode"><span>Room code</span><b>${esc(net.code)}</b><button id="copycode">Copy</button></div>
+      <p>${net.host ? 'You are the host: you pick the map (Maps tab) and everyone follows.' : 'You joined this room. The host picks the map.'}${net.password ? ' This room has a password.' : ''} NPCs: <b>${net.npcs ? 'on' : 'off'}</b>.</p>
+      <h3>Players (${net.players.size + 1})</h3><ul class="plist">${players.join('')}</ul>
+      <p class="hint">Grab someone with your Fling Line (aim at them, ${bindText('grab', 1)}), ${bindText('grab', 1)} again to throw them!</p>
+      <button id="leave" class="danger">Leave room</button>`;
+    w.querySelector('#copycode').onclick = () => { try { navigator.clipboard.writeText(net.code); toast('Code copied'); } catch (e) { toast(net.code); } };
+    w.querySelector('#leave').onclick = () => { leaveRoom(); renderMenu(); };
+  } else {
+    w.innerHTML = `
+      <div class="ocol"><h3>Host a room</h3>
+        <label>Password (optional, for a private room) <input id="hpass" type="text" maxlength="24" placeholder="none"></label>
+        <label class="chk"><input id="hnpc" type="checkbox" checked> NPCs (people walking around)</label>
+        <button id="host">Host a room</button></div>
+      <div class="ocol"><h3>Join a room</h3>
+        <label>Room code <input id="jcode" type="text" maxlength="8" placeholder="ABC123" style="text-transform:uppercase"></label>
+        <label>Password (if it has one) <input id="jpass" type="text" maxlength="24"></label>
+        <button id="join">Join</button></div>
+      <p class="status">${esc(net.status || '')}</p>`;
+    w.querySelector('#host').onclick = () => hostRoom({ password: w.querySelector('#hpass').value.trim(), npcs: w.querySelector('#hnpc').checked });
+    w.querySelector('#join').onclick = () => joinRoom(w.querySelector('#jcode').value, w.querySelector('#jpass').value.trim());
+    // typing in these boxes shouldn't move you / trigger keys
+    w.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => e.stopPropagation()));
+  }
+}
+net.onChange = () => { if (UI.menuOpen && UI.tab === 'online') renderMenu(); };
+
 function renderProfile(body) {
   const wrap = document.createElement('div');
   wrap.className = 'settings profile';
@@ -423,7 +459,17 @@ export function renderMenu() {
     $('menusub').textContent = `${MAPS.length} maps. Loading a map resets everything on it.`;
     const grid = section(body, 'All maps');
     grid.classList.add('wide');
-    for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, () => { loadMap(m.id); closeMenu(); toast(m.name); }, G.mapId === m.id));
+    for (const m of MAPS) grid.appendChild(card(m.icon, m.name, m.desc, () => {
+      if (G.net && G.net.active) {
+        if (!G.net.host) { toast('Only the host can change the map'); return; }
+        G.shareMap(m.id); G.loadMapNet(m.id);
+      } else loadMap(m.id);
+      closeMenu(); toast(m.name);
+    }, G.mapId === m.id));
+  } else if (UI.tab === 'online') {
+    $('menutitle').textContent = 'Play together';
+    $('menusub').textContent = 'Host a room and give your friends the code, or join theirs. Browser to browser: no account needed. Your name and look come from your profile.';
+    renderOnline(body);
   } else if (UI.tab === 'profile') {
     $('menutitle').textContent = 'Profile';
     $('menusub').textContent = 'Everyone on this computer can have their own profile: settings, controls, hotbar, loadouts, stats and look are kept separately.';

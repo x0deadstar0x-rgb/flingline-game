@@ -927,9 +927,11 @@ export function loadMap(id) {
   G.waterAt = () => -Infinity;
   skyDome(m.sky[0], m.sky[1]);
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
+  G.mapBuilding = true; G.mapNid = 0; G.entByNid = new Map();
   m.build();
   if (m.id !== 'sky') makeClouds(18, 70, 300);
   applyTime(G.settings ? G.settings.time : 'day');
+  G.mapBuilding = false;
   G.spawn = new THREE.Vector3(...m.spawn);
   if (G.player) G.player.respawn();
 }

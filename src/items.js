@@ -417,8 +417,10 @@ export function createEnt(def, pos, opts = {}) {
     body.sleepSpeedLimit = 0.5; body.sleepTimeLimit = 0.4;
     if (volumeOf(def) * sc ** 3 < 0.06) { body.collisionFilterGroup = GROUP.DEBRIS; body.collisionFilterMask = ~GROUP.DEBRIS; }
   }
+  // an id that's the same on every computer in a room (map things and things from shared actions)
+  const nid = G.netEvent ? G.netEvent.base + '#' + (G.netEvent.n++) : (G.mapBuilding ? 'm' + (G.mapNid = (G.mapNid || 0) + 1) : null);
   const ent = {
-    id: nextId++, kind: 'item', def, mat, body, mesh, vol: volumeOf(def) * sc ** 3,
+    id: nextId++, nid, kind: 'item', def, mat, body, mesh, vol: volumeOf(def) * sc ** 3,
     hp: def.explosive ? def.explosive.hp : (def.hp ?? mat.hp),
     gen: opts.gen ?? 0, born: G.time, spawned: !!opts.spawned, scale: sc,
     frozen: 0, antigrav: 0, thrusters: [], wet: false,
@@ -428,6 +430,7 @@ export function createEnt(def, pos, opts = {}) {
   G.world.addBody(body);
   G.scene.add(mesh);
   G.ents.add(ent);
+  if (nid) { if (!G.entByNid) G.entByNid = new Map(); G.entByNid.set(nid, ent); }
   if (opts.sleep) body.sleep();
   syncEnt(ent);
   enforceLimit();
@@ -450,6 +453,7 @@ function enforceLimit() {
 export function removeEnt(ent, quiet = false) {
   if (!ent || ent.dead) return;
   ent.dead = true;
+  if (ent.nid && G.entByNid) G.entByNid.delete(ent.nid);
   if (G.onRemove) G.onRemove(ent);
   for (let i = G.ropes.length - 1; i >= 0; i--) {
     const r = G.ropes[i];
