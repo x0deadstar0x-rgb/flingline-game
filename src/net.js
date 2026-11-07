@@ -16,7 +16,7 @@ import { G, toast, GROUP, clamp } from './core.js';
 import { buildHumanoid, poseHumanoid, disposeHumanoid } from './dummy.js';
 import { unfreeze } from './items.js';
 import { profileLook } from './look.js';
-import { activeProfile } from './store.js';
+import { activeProfile, getP, setP } from './store.js';
 
 const PREFIX = 'flingzone-v1-';
 export const net = {
@@ -46,8 +46,17 @@ function changed() { if (net.onChange) net.onChange(); }
 // A room's peer is net.peer from the moment it's made: anything an older one still says (a
 // second click, a room you left) is ignored.
 let leaving = false;
-export function hostRoom({ password = '', npcs = true } = {}) {
+// who this browser is (kept between visits), so a host can keep someone they banned out
+function clientId() {
+  let id = getP('clientId');
+  if (!id) { id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36); setP('clientId', id); }
+  return id;
+}
+// the host's list of people kept out: client id -> until when (ms since 1970; Infinity = banned)
+const kept = new Map();
+export function hostRoom({ password = '', npcs = true, maxPlayers = 8 } = {}) {
   leaveRoom(true);
+  net.maxPlayers = Math.max(2, Math.min(24, maxPlayers | 0 || 8));
   const code = code6();
   net.status = 'Opening a room…'; changed();
   const peer = new Peer(PREFIX + code, peerOpts());
@@ -65,7 +74,7 @@ export function hostRoom({ password = '', npcs = true } = {}) {
   peer.on('error', (e) => {
     // (once the room is open, server trouble doesn't matter: the players are connected directly)
     if (peer !== net.peer || net.active) return;
-    if (e.type === 'unavailable-id') { hostRoom({ password, npcs }); return; } // code taken: try another
+    if (e.type === 'unavailable-id') { hostRoom({ password, npcs, maxPlayers: net.maxPlayers }); return; } // code taken: try another
     net.status = 'Could not open a room: ' + (e.type || e.message); changed(); toast(net.status);
   });
   peer.on('disconnected', () => backOnServer(peer));
@@ -81,7 +90,7 @@ export function joinRoom(code, password = '') {
   peer.once('open', (id) => {
     if (peer !== net.peer) return;
     net.myId = id;
-    const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: myName(), password, look: profileLook() } });
+    const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: myName(), password, look: profileLook(), cid: clientId() } });
     if (!conn) return;
     conn.on('open', () => { if (peer === net.peer) net.conns.set(conn.peer, conn); else conn.close(); });
     conn.on('data', (d) => onData(conn, d));
@@ -131,13 +140,16 @@ export function leaveRoom(quiet = false) {
 function acceptGuest(conn) {
   conn.on('open', () => {
     const md = conn.metadata || {};
+    const until = md.cid ? kept.get(md.cid) : undefined;
+    if (until !== undefined && until > Date.now()) { conn.send({ t: 'deny', why: until === Infinity ? 'You are banned from this room' : `You were timed out: try again in ${Math.ceil((until - Date.now()) / 60000)} min` }); setTimeout(() => conn.close(), 300); return; }
     if (net.password && md.password !== net.password) { conn.send({ t: 'deny', why: 'Wrong password' }); setTimeout(() => conn.close(), 300); return; }
-    if (net.conns.size >= 23) { conn.send({ t: 'deny', why: 'The room is full' }); setTimeout(() => conn.close(), 300); return; }
+    if (net.conns.size + 1 >= (net.maxPlayers || 8)) { conn.send({ t: 'deny', why: 'The room is full' }); setTimeout(() => conn.close(), 300); return; }
     // (the same player on a new line: the old one goes quietly)
     const old = net.conns.get(conn.peer);
     if (old && old !== conn) { old.removeAllListeners(); try { old.close(); } catch (e) { /* ignore */ } }
     net.conns.set(conn.peer, conn);
     addPlayer(conn.peer, md.name || 'Player', md.look);
+    const pl = net.players.get(conn.peer); if (pl) pl.cid = md.cid || '';
     // everything they need: the map, who's here, and what has happened so far
     const players = [{ id: net.myId, name: myName(), look: profileLook() }, ...[...net.players.values()].filter((p) => p.id !== conn.peer).map((p) => ({ id: p.id, name: p.name, look: p.look }))];
     conn.send({ t: 'welcome', id: conn.peer, map: G.mapId, seed: net.mapSeed, npcs: net.npcs, players, log: net.log.slice(-1500) });
@@ -150,6 +162,20 @@ function acceptGuest(conn) {
   conn.on('close', () => dropGuest(conn));
   conn.on('error', () => dropGuest(conn));
 }
+// The host's tools: kick someone out, keep them out for a while, or for good
+export function kickPlayer(id, mode = 'kick', minutes = 5) {
+  if (!net.active || !net.host) return;
+  const p = net.players.get(id), conn = net.conns.get(id);
+  if (!p) return;
+  if (mode === 'ban' && p.cid) kept.set(p.cid, Infinity);
+  if (mode === 'timeout' && p.cid) kept.set(p.cid, Date.now() + minutes * 60000);
+  const why = mode === 'ban' ? 'You were banned from the room' : mode === 'timeout' ? `You were timed out for ${minutes} min` : 'You were kicked from the room';
+  if (conn) { try { conn.send({ t: 'deny', why }); } catch (e) { /* ignore */ } setTimeout(() => { try { conn.close(); } catch (e) { /* ignore */ } dropGuest(conn); }, 250); }
+  toast(`${p.name} ${mode === 'ban' ? 'is banned' : mode === 'timeout' ? `is timed out (${minutes} min)` : 'was kicked'}`);
+}
+export function unbanAll() { kept.clear(); toast('Everyone can join again'); }
+export function bannedCount() { let n = 0; const now = Date.now(); for (const u of kept.values()) if (u > now) n++; return n; }
+export function setMaxPlayers(n) { net.maxPlayers = Math.max(2, Math.min(24, n | 0 || 8)); changed(); }
 function dropGuest(conn) {
   const id = conn.peer;
   if (net.conns.get(id) !== conn) return; // (never let in, or already replaced)
@@ -177,7 +203,7 @@ function onData(conn, d) {
     else if (d.t === 'ev') d.from = conn.peer;
   }
   switch (d.t) {
-    case 'deny': toast(`Can't join: ${d.why}`); net.status = d.why; leaveRoom(true); changed(); break;
+    case 'deny': toast(net.active ? d.why : `Can't join: ${d.why}`); net.status = d.why; leaveRoom(true); changed(); break;
     case 'welcome': {
       Object.assign(net, { active: true, host: false, code: conn.peer.slice(PREFIX.length), myId: d.id, mapSeed: d.seed, npcs: d.npcs });
       for (const p of d.players) addPlayer(p.id, p.name, p.look);
@@ -204,7 +230,7 @@ function onData(conn, d) {
       break;
     case 'map': if (!net.host) { net.mapSeed = d.seed; net.npcs = d.npcs; net.log = []; G.loadMapNet && G.loadMapNet(d.id); } break;
     case 'snap': if (!net.host) applySnapshot(d.s); break;
-    case 'hold': if (net.host) broadcast(d, conn.peer); applyHold(d); break;
+    case 'hold': if (net.host) { d.by = conn.peer; broadcast(d, conn.peer); } applyHold(d); break;
     case 'tug': // someone has you on their Fling Line
       if (d.to === net.myId) { G.tugged = { p: new THREE.Vector3(...d.p), until: G.time + 0.3, k: d.k }; }
       else if (net.host) send(d.to, d);
@@ -367,6 +393,8 @@ function addPlayer(id, name, look) {
   net.players.set(id, p);
 }
 function removeAvatar(p) {
+  if (p.toolMesh) { p.toolMesh.removeFromParent(); p.toolMesh.material.dispose(); }
+  if (p.line) { p.line.removeFromParent(); p.line.geometry.dispose(); }
   for (const k in p.meshes) G.scene.remove(p.meshes[k]);
   disposeHumanoid(p.meshes);
   if (p.body) G.world.removeBody(p.body);
@@ -413,7 +441,7 @@ function applySnapshot(list) {
 function holdMsg(e, rel = false) {
   const b = e.body;
   return {
-    t: 'hold', n: e.nid, p: [b.position.x, b.position.y, b.position.z], q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
+    t: 'hold', n: e.nid, by: net.myId, p: [b.position.x, b.position.y, b.position.z], q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
     v: [b.velocity.x, b.velocity.y, b.velocity.z], w: [b.angularVelocity.x, b.angularVelocity.y, b.angularVelocity.z], rel: rel ? 1 : 0, anc: e.anchored ? 1 : 0,
   };
 }
@@ -421,6 +449,13 @@ function applyHold(d) {
   const e = G.entByNid && G.entByNid.get(d.n);
   if (!e || e.dead || e === heldByMe() || e === G.vehicle) return;
   const b = e.body;
+  // who holds it (their avatar shows the line to it); not the car they're driving
+  const holder = d.by && net.players.get(d.by);
+  if (holder && holder.veh !== d.n) { holder.holdN = d.rel ? null : d.n; holder.holdT = G.time; }
+  // Ghost items (a setting, on at first): what someone else holds is see-through here, passes
+  // through everything and just follows their updates smoothly; let go, it's solid again
+  const ghost = !d.rel && !d.anc && G.settings && G.settings.ghostItems && holder && holder.veh !== d.n;
+  setGhost(e, ghost, d);
   // whoever has it set it loose (grabbing frees frozen, anchored and carried things): here too
   if (!d.anc) {
     if (e.frozen) unfreeze(e);
@@ -436,6 +471,68 @@ function applyHold(d) {
   e.netHeldT = d.rel ? -99 : G.time;
   if (d.anc && G.anchorEnt) G.anchorEnt(e);
 }
+const ghosts = new Set();
+function setGhost(e, on, d) {
+  const b = e.body;
+  if (on) {
+    if (!e.ghost) {
+      e.ghost = { type: b.type, mask: b.collisionFilterMask, mats: [] };
+      b.type = CANNON.Body.KINEMATIC; b.collisionFilterMask = 0;
+      e.mesh.traverse((o) => {
+        if (!o.material) return;
+        const orig = o.material;
+        o.material = Array.isArray(orig) ? orig.map((m) => { const c = m.clone(); c.transparent = true; c.opacity = 0.45; c.depthWrite = false; return c; }) : Object.assign(orig.clone(), { transparent: true, opacity: 0.45, depthWrite: false });
+        e.ghost.mats.push([o, orig]);
+      });
+      ghosts.add(e);
+    }
+    e.ghostT = G.time;
+    // (moves smoothly towards their next update)
+    if (d && d.v) b.velocity.set(d.v[0], d.v[1], d.v[2]);
+  } else if (e.ghost) {
+    for (const [o, orig] of e.ghost.mats) { const g = o.material; o.material = orig; (Array.isArray(g) ? g : [g]).forEach((m) => m.dispose()); }
+    b.type = e.ghost.type; b.collisionFilterMask = e.ghost.mask;
+    b.updateMassProperties(); b.wakeUp();
+    e.ghost = null;
+    ghosts.delete(e);
+  }
+}
+// what ghosts are no longer held (their holder went quiet) turn solid again
+function updateGhosts() {
+  for (const e of ghosts) if (e.dead || G.time - e.ghostT > 0.6 || !(G.settings && G.settings.ghostItems)) { if (!e.dead) setGhost(e, false); else ghosts.delete(e); }
+}
+// the tool someone holds, in their avatar's hand (a little block in the tool's colour)
+const toolGeo = new THREE.BoxGeometry(0.11, 0.11, 0.46);
+function showTool(p) {
+  if (p.toolShown === p.tool) return;
+  p.toolShown = p.tool;
+  if (p.toolMesh) { p.toolMesh.removeFromParent(); p.toolMesh.material.dispose(); p.toolMesh = null; }
+  const t = p.tool && G.toolById && G.toolById(p.tool);
+  if (!t || !p.meshes.armR || p.tool === 'hands') return;
+  const m = new THREE.Mesh(toolGeo, new THREE.MeshStandardMaterial({ color: t.color ?? 0x888888, roughness: 0.5, metalness: 0.3, flatShading: true }));
+  m.position.set(0, -0.36, 0.16);
+  p.meshes.armR.add(m);
+  p.toolMesh = m;
+}
+// the line from someone's hand to what they hold
+const lineMat = new THREE.LineBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0.85 });
+function showLine(p) {
+  const e = p.holdN && G.time - p.holdT < 0.6 && G.entByNid ? G.entByNid.get(p.holdN) : null;
+  if (!e || e.dead) { if (p.line) p.line.visible = false; return; }
+  if (!p.line) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    p.line = new THREE.Line(g, lineMat);
+    p.line.frustumCulled = false;
+    G.scene.add(p.line);
+  }
+  const a = p.line.geometry.attributes.position;
+  const yaw = p.yaw, hx = Math.cos(yaw) * 0.38, hz = -Math.sin(yaw) * 0.38;
+  a.setXYZ(0, p.pos.x + hx, p.pos.y + 0.15, p.pos.z + hz);
+  a.setXYZ(1, e.body.position.x, e.body.position.y, e.body.position.z);
+  a.needsUpdate = true;
+  p.line.visible = true;
+}
 // You let go of something (dropped, thrown, anchored, got out of the car): one last word on
 // where it is and how it moves, so a throw carries on everywhere and the host has it again.
 export function shareRelease(e) {
@@ -449,6 +546,7 @@ G.shareRelease = shareRelease;
 // ---------------------------------------------------------------- every frame
 let stT = 0, snapT = 0, holdT = 0;
 export function updateNet(dt) {
+  if (ghosts.size) updateGhosts();
   if (!net.active) return;
   // others: ease towards where they said they are, animate, name tag
   for (const p of net.players.values()) {
@@ -464,6 +562,7 @@ export function updateNet(dt) {
     p.amt += (clamp(hs / 6, 0, 1) - p.amt) * Math.min(1, dt * 8);
     p.phase += dt * (3 + hs * 1.6);
     poseHumanoid(p.meshes, 1, new THREE.Vector3(p.pos.x, p.pos.y - 0.9, p.pos.z), p.yaw + Math.PI, p.phase, p.amt, p.veh ? { sit: true, pitch: p.pitch } : { aim: p.pitch, pitch: p.pitch });
+    showTool(p); showLine(p);
     const head = new THREE.Vector3(p.pos.x, p.pos.y + 1.25, p.pos.z).project(G.camera);
     const d = G.camera.position.distanceTo(p.pos);
     p.tag.style.opacity = head.z < 1 && d < 120 ? '1' : '0';

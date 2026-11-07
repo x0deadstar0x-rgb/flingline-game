@@ -62,6 +62,22 @@
   #start .mpstatus, #start .inroom { font-size: 13px; color: var(--dim); margin-top: 4px; }
   #start .inroom b { color: #fff; font: 700 16px var(--mono); letter-spacing: 2px; }
   body.inmenu #hud, body.inmenu #paused { display: none !important; }
+  /* the player list (Tab), like in Minecraft: over the game, at the top */
+  #plist { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 45; display: none; min-width: 340px; max-width: 92vw; background: rgba(10,10,12,0.72); border: 1px solid rgba(255,255,255,0.14); padding: 10px 12px 8px; font-size: 14px; color: #eee; backdrop-filter: blur(3px); }
+  #plist.show { display: block; }
+  #plist .ph { font: 700 11px var(--mono); letter-spacing: 2px; color: #aaa; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 16px; }
+  #plist .prow { display: flex; align-items: center; gap: 8px; padding: 5px 6px; min-height: 30px; }
+  #plist .prow:nth-child(odd) { background: rgba(255,255,255,0.04); }
+  #plist .prow:hover { background: rgba(255,255,255,0.12); }
+  #plist .pn { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #plist .tagh { font: 700 10px var(--mono); color: #ffb347; margin-left: 6px; }
+  #plist .acts { display: none; gap: 5px; }
+  #plist .prow:hover .acts { display: inline-flex; }
+  #plist .acts button { background: rgba(255,255,255,0.08); color: #eee; border: 1px solid rgba(255,255,255,0.2); padding: 3px 8px; font-size: 12px; cursor: pointer; }
+  #plist .acts button:hover { background: rgba(255,255,255,0.2); }
+  #plist .acts button.danger { border-color: #c0392b; color: #ff7b6b; }
+  #plist .pf { font-size: 12px; color: #999; margin-top: 6px; }
+  #plist .pf kbd { font: 600 11px var(--mono); border: 1px solid rgba(255,255,255,0.3); padding: 1px 5px; color: #fff; }
   #start kbd, .help kbd { font: 600 11px var(--mono); color: #fff; border: 1px solid var(--line2); padding: 2px 6px; min-width: 22px; text-align: center; }
 
   #paused { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); cursor: pointer; font: 700 14px var(--mono); letter-spacing: 3px; }
@@ -114,6 +130,10 @@
   .online .roomcode { display: flex; align-items: center; gap: 12px; font-size: 14px; }
   .online .roomcode b { font-size: 34px; letter-spacing: 6px; }
   .online .plist { margin: 6px 0 12px 18px; }
+  .online .plist li { display: flex; align-items: center; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
+  .online .pacts { display: inline-flex; gap: 6px; }
+  .online .pacts button { padding: 4px 8px; font-size: 12px; }
+  .online .hostrow input { width: 64px; }
   .online .status { opacity: 0.85; min-height: 1.2em; }
   .bubble { position: fixed; left: 0; top: 0; pointer-events: none; background: rgba(255,255,255,0.94); color: #1d2430; font: 600 13px system-ui, sans-serif; padding: 4px 9px; border-radius: 10px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.25); z-index: 5; }
   .bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-top-color: rgba(255,255,255,0.94); border-bottom: 0; }
@@ -277,6 +297,7 @@
   <div id="hotbar"></div>
   <div id="grabkey"></div>
 </div>
+<div id="plist"></div>
 <div id="toast"></div>
 <div id="popups"></div>
 <div id="whiteflash"></div>
@@ -289,7 +310,7 @@
       <button data-tab="tools">Tools</button>
       <button data-tab="items">Spawn</button>
       <button data-tab="maps">Maps</button>
-      <button data-tab="online">Online</button>
+      <button data-tab="online">Players</button>
       <button data-tab="profile">Profile</button>
       <button data-tab="settings">Settings</button>
       <button data-tab="controls">Controls</button>

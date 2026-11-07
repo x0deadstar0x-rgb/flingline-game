@@ -17,7 +17,7 @@ function groundProbe(p, v) {
   const hs = Math.hypot(v.x, v.z);
   const ax = hs > 0.5 ? (v.x / hs) * 0.32 : 0, az = hs > 0.5 ? (v.z / hs) * 0.32 : 0;
   let best = null;
-  for (const [dx, dz] of [[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2], [ax, az]]) {
+  for (const [dx, dz] of [[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2], [0.24, 0.24], [-0.24, 0.24], [0.24, -0.24], [-0.24, -0.24], [ax, az]]) {
     _o.set(p.x + dx, p.y - 0.25, p.z + dz);
     _e.set(p.x + dx, p.y - STAND - 0.75, p.z + dz);
     const h = raycast(_o, _e, GROUP.STATIC | GROUP.DYN);
@@ -30,6 +30,8 @@ function groundProbe(p, v) {
 // spring + damper towards standing height, applied every physics step while you're grounded
 G.extraForces.push(() => {
   const pl = G.player;
+  // flying: gravity is cancelled out, so you stay exactly where you fly (no slow sinking)
+  if (pl && pl.flying && !G.vehicle && pl.body) { pl.body.applyForce(new CANNON.Vec3(0, pl.body.mass * 9.82, 0)); return; }
   // (not while driving: you're in the seat, not on your feet)
   if (!pl || !pl.hover || G.vehicle) return;
   const b = pl.body, h = pl.hover;
@@ -202,7 +204,7 @@ export class Player {
     if (p.y < (G.killY ?? -30)) this.respawn();
     // safety net: never stay inside the ground
     // (only if you're really inside solid ground: tunnels and caves are fine)
-    if (G.solidAt && G.solidAt(p.x, p.y - 0.9 + 0.35, p.z)) { const gy = G.floorAt(p.x, p.y - 0.9 + 0.35, p.z); b.position.y = gy + STAND + 0.05; if (b.velocity.y < 0) b.velocity.y = 0; }
+    if (G.solidAt && G.solidAt(p.x, p.y - 0.15, p.z) && G.solidAt(p.x, p.y + 0.3, p.z)) { const gy = G.floorAt(p.x, p.y - 0.15, p.z); b.position.y = gy + STAND + 0.05; b.previousPosition.y = b.interpolatedPosition.y = b.position.y; if (b.velocity.y < 0) b.velocity.y = 0; }
 
     // camera
     const cp = Math.cos(this.pitch);

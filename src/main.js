@@ -5,13 +5,14 @@ import { G, updatePopups, updateToast, toast, clamp } from './core.js';
 import { initAudio, toggleMute, setListener, setVolume, setAudioPaused, sfx } from './audio.js';
 import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, bindText } from './input.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
+import { activeProfile } from './store.js';
 import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import { initNuke, updateNukes } from './nuke.js';
 import { updateBuildings } from './buildings.js';
 import { toggleVehicle, updateVehicle } from './vehicles.js';
 import { updateBubbles } from './dummy.js';
-import { net, updateNet, doAction, shareHeld, tugPlayer, flingPlayer, withSeed, shareMap, hostRoom, joinRoom, leaveRoom, asMe } from './net.js';
+import { net, updateNet, doAction, shareHeld, tugPlayer, flingPlayer, withSeed, shareMap, hostRoom, joinRoom, leaveRoom, asMe, kickPlayer } from './net.js';
 G.shareMap = shareMap;
 import * as Items from './items.js';
 import { Player } from './player.js';
@@ -162,6 +163,33 @@ function start() {
   document.body.classList.remove('inmenu');
   requestLock();
 }
+// ---- the player list (Tab), like in Minecraft: everyone in the room, over the game. Unlock the
+// mouse with the lock key and, if you're the host, hover over someone to time out, kick or ban them.
+const plistEl = document.getElementById('plist');
+let plistOpen = false;
+function togglePlayerList(show = !plistOpen) {
+  plistOpen = show;
+  plistEl.classList.toggle('show', show);
+  if (show) renderPlayerList();
+  else if (playing && !UI.menuOpen && !isLocked() && !lockFailed()) requestLock();
+  updatePausedOverlay();
+}
+G.togglePlayerList = togglePlayerList;
+function renderPlayerList() {
+  if (!plistOpen) return;
+  const me = activeProfile() ? activeProfile().name : 'You';
+  const rows = [`<div class="prow"><span class="pn">${esc(me)}<span class="tagh">${net.active && net.host ? 'HOST · ' : ''}YOU</span></span></div>`];
+  for (const p of net.players.values()) {
+    const acts = net.host ? `<span class="acts"><button data-k="timeout" data-id="${esc(p.id)}">Time out 5 min</button><button data-k="kick" data-id="${esc(p.id)}">Kick</button><button data-k="ban" data-id="${esc(p.id)}" class="danger">Ban</button></span>` : '';
+    rows.push(`<div class="prow"><span class="pn">${esc(p.name)}</span>${acts}</div>`);
+  }
+  const head = net.active ? `<span>PLAYERS ${net.players.size + 1}${net.host ? ' / ' + (net.maxPlayers || 8) : ''}</span><span>ROOM ${esc(net.code)}</span>` : '<span>PLAYERS</span><span>NOT IN A ROOM</span>';
+  const foot = !net.active ? `Playing alone. Press <kbd>${esc(bindText('mainMenu', 1))}</kbd> to host or join a room.`
+    : net.host ? (isLocked() ? `Press <kbd>${esc(bindText('lockMouse', 1))}</kbd> to free the mouse, then hover over someone to time out, kick or ban them.` : 'Hover over someone to time out, kick or ban them.') : '';
+  plistEl.innerHTML = `<div class="ph">${head}</div>${rows.join('')}${foot ? `<div class="pf">${foot}</div>` : ''}`;
+  plistEl.querySelectorAll('.acts button').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); kickPlayer(b.dataset.id, b.dataset.k, 5); setTimeout(renderPlayerList, 400); }; });
+}
+plistEl.addEventListener('mousedown', (e) => e.stopPropagation());
 // ---- the main menu (the start screen): play, host a room, join a room. M brings it back.
 const startEl = document.getElementById('start');
 startEl.addEventListener('click', () => start());
@@ -198,6 +226,7 @@ function menuOrbit(dt) {
 }
 function toMainMenu() {
   if (UI.menuOpen) closeMenu();
+  if (plistOpen) togglePlayerList(false);
   playing = false;
   escPaused = false;
   if (isLocked()) document.exitPointerLock();
@@ -223,28 +252,30 @@ function renderStartRoom() {
     go.textContent = playing || G.everPlayed ? 'KEEP PLAYING' : 'PLAY';
     w.innerHTML = `<div class="mprow"><button id="mphost">HOST A ROOM</button>
         <label class="chk"><input id="mpnpc" type="checkbox" checked> NPCs</label>
+        <label class="chk">max <input id="mpmax" type="number" min="2" max="24" value="8" style="width:52px"></label>
         <input id="mppass" type="text" maxlength="24" placeholder="password (optional)"></div>
       <div class="mprow"><input id="mpcode" type="text" maxlength="8" placeholder="ROOM CODE" style="text-transform:uppercase">
         <input id="mpjpass" type="text" maxlength="24" placeholder="password (if any)">
         <button id="mpjoin">JOIN</button></div>
       <div class="mpstatus">${esc(net.status || 'Play with friends: host a room and tell them the code, or join theirs.')}</div>`;
-    w.querySelector('#mphost').onclick = () => { hostRoom({ password: w.querySelector('#mppass').value.trim(), npcs: w.querySelector('#mpnpc').checked }); start(); };
+    w.querySelector('#mphost').onclick = () => { hostRoom({ password: w.querySelector('#mppass').value.trim(), npcs: w.querySelector('#mpnpc').checked, maxPlayers: +w.querySelector('#mpmax').value }); start(); };
     const join = () => { const code = w.querySelector('#mpcode').value.trim(); if (code.length < 4) { toast('Type the room code first'); return; } joinRoom(code, w.querySelector('#mpjpass').value.trim()); start(); };
     w.querySelector('#mpjoin').onclick = join;
-    w.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && i.id !== 'mppass') join(); }));
+    w.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && (i.id === 'mpcode' || i.id === 'mpjpass')) join(); }));
   }
 }
-{ const prev = net.onChange; net.onChange = () => { if (prev) prev(); if (!startEl.classList.contains('hidden')) { renderStartRoom(); renderStartMaps(); } }; }
+{ const prev = net.onChange; net.onChange = () => { if (prev) prev(); renderPlayerList(); if (!startEl.classList.contains('hidden')) { renderStartRoom(); renderStartMaps(); } }; }
 renderStartRoom();
 document.addEventListener('pointerlockchange', () => {
   if (!isLocked()) clearInput(); else lockFails = 0;
   updatePausedOverlay();
+  if (plistOpen) renderPlayerList();
 });
 document.addEventListener('pointerlockerror', onLockFail);
 document.getElementById('paused').addEventListener('click', () => { escPaused = false; requestLock(); updatePausedOverlay(); });
 let escPaused = false; // paused with Esc where the mouse can't be captured
 function updatePausedOverlay() {
-  document.getElementById('paused').classList.toggle('show', playing && !UI.menuOpen && ((!isLocked() && !lockFailed()) || escPaused));
+  document.getElementById('paused').classList.toggle('show', playing && !UI.menuOpen && !plistOpen && ((!isLocked() && !lockFailed()) || escPaused));
 }
 G.updatePausedOverlay = updatePausedOverlay;
 
@@ -348,7 +379,8 @@ function globalActions() {
     if (isLocked()) document.exitPointerLock();
     else { escPaused = false; lockFails = 0; requestLock(); updatePausedOverlay(); }
   }
-  if (input.tap('menu')) { if (UI.menuOpen) closeMenu(); else openMenu(); }
+  if (input.tap('menu')) { if (plistOpen) togglePlayerList(false); if (UI.menuOpen) closeMenu(); else openMenu(); }
+  if (input.tap('players') && playing && !UI.menuOpen) togglePlayerList();
   if (input.tap('help') && !UI.menuOpen) openMenu('help');
   if (input.tap('mute')) toast(toggleMute() ? 'Muted' : 'Sound on');
   if (input.tap('mainMenu') && playing) toMainMenu();

@@ -2,7 +2,7 @@
 import { G } from './core.js';
 import { getP, setP } from './store.js';
 
-export const DEFAULTS = { sens: 2.2, volume: 0.8, fov: 72, quality: 'high', invertY: false, time: 'day', theme: 'dark', spawnUnbreakable: false };
+export const DEFAULTS = { sens: 2.2, volume: 0.8, fov: 72, quality: 'high', invertY: false, time: 'day', theme: 'dark', spawnUnbreakable: false, ghostItems: true };
 export const S = { ...DEFAULTS };
 
 {

@@ -10,7 +10,7 @@ import { thumb } from './thumbs.js';
 import { getP, setP, listProfiles, activeProfile, createProfile, renameProfile, switchProfile, deleteProfile } from './store.js';
 import { profileLook, setProfileLook, HATS, SKIN_COLORS, CLOTH_COLORS } from './look.js';
 import { bindText, ACTIONS, PRESETS, binds, ctl, applyPreset, setBind, keyName, captureNext, saveControls } from './input.js';
-import { net, hostRoom, joinRoom, leaveRoom } from './net.js';
+import { net, hostRoom, joinRoom, leaveRoom, kickPlayer, unbanAll, bannedCount, setMaxPlayers } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -152,11 +152,12 @@ function renderSettings(body) {
     }
     return box;
   };
-  row('Mouse sensitivity', 'Also [ and ] in game. Raise it if your touchpad feels slow.', slider('sens', 0.3, 8, 0.1, (v) => v.toFixed(1)));
+  row('Mouse sensitivity', `Also ${bindText('sensDown', 1)} and ${bindText('sensUp', 1)} in game. Raise it if your touchpad feels slow.`, slider('sens', 0.3, 8, 0.1, (v) => v.toFixed(1)));
   row('Invert look up/down', 'Flip vertical mouse movement.', choice('invertY', [[false, 'Off'], [true, 'On']]));
   row('Field of view', 'How wide you can see.', slider('fov', 60, 100, 1, (v) => `${v}°`));
-  row('Volume', 'M mutes everything.', slider('volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
-  row('Graphics', 'Low turns off shadows and lowers resolution (much faster). Also L.', choice('quality', [['high', 'High'], ['low', 'Low']]));
+  row('Volume', `${bindText('mute', 1)} mutes everything.`, slider('volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`));
+  row('Graphics', `Low turns off shadows and lowers resolution (much faster). Also ${bindText('quality', 1)}.`, choice('quality', [['high', 'High'], ['low', 'Low']]));
+  row('Ghost items', 'In a room: what other players hold on their Fling Line shows see-through and passes through you, and follows them smoothly. Off: it stays solid and can bump into you.', choice('ghostItems', [[true, 'On'], [false, 'Off']]));
   row('Theme', 'Light or dark menus.', choice('theme', [['dark', 'Dark'], ['light', 'Light']]));
   row('Time of day', 'Night makes explosions and lamps glow.', choice('time', [['day', 'Day'], ['sunset', 'Sunset'], ['night', 'Night']]));
   const reset = document.createElement('button');
@@ -175,27 +176,36 @@ function renderOnline(body) {
   body.appendChild(w);
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   if (net.active) {
-    const players = [`<li><b>${esc(activeProfile().name)}</b> (you${net.host ? ', host' : ''})</li>`, ...[...net.players.values()].map((p) => `<li>${esc(p.name)}</li>`)];
+    // (the host can kick someone, time them out for 5 minutes, or ban them from this room)
+    const act = (id) => net.host ? `<span class="pacts"><button data-k="kick" data-id="${esc(id)}">Kick</button><button data-k="timeout" data-id="${esc(id)}">Time out 5 min</button><button data-k="ban" data-id="${esc(id)}" class="danger">Ban</button></span>` : '';
+    const players = [`<li><b>${esc(activeProfile().name)}</b> (you${net.host ? ', host' : ''})</li>`, ...[...net.players.values()].map((p) => `<li><span>${esc(p.name)}</span>${act(p.id)}</li>`)];
+    const nb = net.host ? bannedCount() : 0;
     w.innerHTML = `
       <div class="roomcode"><span>Room code</span><b>${esc(net.code)}</b><button id="copycode">Copy</button></div>
       <p>${net.host ? 'You are the host: you pick the map (Maps tab) and everyone follows.' : 'You joined this room. The host picks the map.'}${net.password ? ' This room has a password.' : ''} NPCs: <b>${net.npcs ? 'on' : 'off'}</b>.</p>
-      <h3>Players (${net.players.size + 1})</h3><ul class="plist">${players.join('')}</ul>
+      <h3>Players (${net.players.size + 1}${net.host ? ' / ' + (net.maxPlayers || 8) : ''})</h3><ul class="plist">${players.join('')}</ul>
+      ${net.host ? `<p class="hostrow"><label>Max players <input id="maxp" type="number" min="2" max="24" value="${net.maxPlayers || 8}"></label>${nb ? ` <button id="unban">Let everyone back in (${nb} kept out)</button>` : ''}</p>` : ''}
       <p class="hint">Grab someone with your Fling Line (aim at them, ${bindText('grab', 1)}), ${bindText('grab', 1)} again to throw them!</p>
       <button id="leave" class="danger">Leave room</button>`;
     w.querySelector('#copycode').onclick = () => { try { navigator.clipboard.writeText(net.code); toast('Code copied'); } catch (e) { toast(net.code); } };
     w.querySelector('#leave').onclick = () => { leaveRoom(); renderMenu(); };
+    w.querySelectorAll('.pacts button').forEach((b) => { b.onclick = () => { kickPlayer(b.dataset.id, b.dataset.k, 5); setTimeout(renderMenu, 400); }; });
+    const mx = w.querySelector('#maxp');
+    if (mx) { mx.addEventListener('keydown', (e) => e.stopPropagation()); mx.onchange = () => setMaxPlayers(+mx.value); }
+    const ub = w.querySelector('#unban'); if (ub) ub.onclick = () => { unbanAll(); renderMenu(); };
   } else {
     w.innerHTML = `
       <div class="ocol"><h3>Host a room</h3>
         <label>Password (optional, for a private room) <input id="hpass" type="text" maxlength="24" placeholder="none"></label>
         <label class="chk"><input id="hnpc" type="checkbox" checked> NPCs (people walking around)</label>
+        <label>Max players <input id="hmax" type="number" min="2" max="24" value="8"></label>
         <button id="host">Host a room</button></div>
       <div class="ocol"><h3>Join a room</h3>
         <label>Room code <input id="jcode" type="text" maxlength="8" placeholder="ABC123" style="text-transform:uppercase"></label>
         <label>Password (if it has one) <input id="jpass" type="text" maxlength="24"></label>
         <button id="join">Join</button></div>
       <p class="status">${esc(net.status || '')}</p>`;
-    w.querySelector('#host').onclick = () => hostRoom({ password: w.querySelector('#hpass').value.trim(), npcs: w.querySelector('#hnpc').checked });
+    w.querySelector('#host').onclick = () => hostRoom({ password: w.querySelector('#hpass').value.trim(), npcs: w.querySelector('#hnpc').checked, maxPlayers: +w.querySelector('#hmax').value });
     w.querySelector('#join').onclick = () => joinRoom(w.querySelector('#jcode').value, w.querySelector('#jpass').value.trim());
     // typing in these boxes shouldn't move you / trigger keys
     w.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => e.stopPropagation()));

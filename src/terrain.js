@@ -299,9 +299,14 @@ export function paintBurn(cx, cz, r0, r1, value, thin = 0.3, rMax = r1) {
   if (!T) return 0;
   const { N, x0, z0, burn } = T;
   const ia = Math.max(0, Math.floor((cx - r1 - x0) / V)), ib = Math.min(N - 1, Math.ceil((cx + r1 - x0) / V));
-  const ja = Math.max(0, Math.floor((z0 - cz - r1) / V)), jb = Math.min(N - 1, Math.ceil((z0 - cz + r1) / V));
   let n = 0;
-  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
+  // (only the ring itself: each row's two short runs between the inner and the outer circle)
+  for (let i = ia; i <= ib; i++) {
+    const dx = x0 + (i + 0.5) * V - cx;
+    if (dx * dx >= r1 * r1) continue;
+    const wo = Math.sqrt(r1 * r1 - dx * dx), wi = dx * dx < r0 * r0 ? Math.sqrt(r0 * r0 - dx * dx) : 0;
+    const runs = wi > 0 ? [[cz + wi, cz + wo], [cz - wo, cz - wi]] : [[cz - wo, cz + wo]];
+    for (const [za, zb] of runs) for (let j = Math.max(0, Math.floor((z0 - zb) / V)); j <= Math.min(N - 1, Math.ceil((z0 - za) / V)); j++) {
     const k = i * N + j;
     if (burn[k] === value) continue;
     const x = x0 + (i + 0.5) * V, z = z0 - (j + 0.5) * V, d = Math.hypot(x - cx, z - cz);
@@ -311,6 +316,7 @@ export function paintBurn(cx, cz, r0, r1, value, thin = 0.3, rMax = r1) {
     if (hash((i >> 2) + 913, (j >> 2) + 77) > keep) continue;
     burn[k] = value; n++;
     markDirty(i, j);
+    }
   }
   return n;
 }

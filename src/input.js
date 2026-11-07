@@ -36,6 +36,7 @@ export const ACTIONS = [
   ['slot6', 'Hotbar 6', 'Hotbar'], ['slot7', 'Hotbar 7', 'Hotbar'], ['slot8', 'Hotbar 8', 'Hotbar'], ['slot9', 'Hotbar 9', 'Hotbar'], ['slot10', 'Hotbar 10', 'Hotbar'],
   ['menu', 'Menu', 'Game'],
   ['mainMenu', 'Main menu (play, host, join)', 'Game'],
+  ['players', 'Player list (kick, time out, ban)', 'Game'],
   ['lockMouse', 'Lock / unlock the mouse', 'Game'],
   ['help', 'Controls screen', 'Game'],
   ['chat', 'Chat (multiplayer)', 'Game'],
@@ -58,7 +59,7 @@ const BASE = {
   anchor: ['KeyQ'], nextItem: ['KeyT'], prevTool: ['Comma'], nextTool: ['Period'], undo: ['KeyU'], interact: ['KeyV'], detonate: ['KeyB'], flashlight: ['KeyL'],
   slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'], slot4: ['Digit4'], slot5: ['Digit5'],
   slot6: ['Digit6'], slot7: ['Digit7'], slot8: ['Digit8'], slot9: ['Digit9'], slot10: ['Digit0'],
-  menu: ['KeyE', 'Tab'], mainMenu: ['KeyM'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
+  menu: ['KeyE'], players: ['Tab'], mainMenu: ['KeyM'], help: ['KeyH'], chat: ['KeyY'], slowmo: ['KeyG'], clear: ['KeyC'], resetMap: ['KeyP'],
   mute: ['KeyK'], quality: ['KeyO'], sensDown: ['Minus'], sensUp: ['Equal'], lockMouse: ['BracketRight'], photo: ['F1'],
 };
 const with_ = (over) => { const o = {}; for (const k in BASE) o[k] = [...BASE[k]]; for (const k in over) o[k] = over[k]; return o; };
