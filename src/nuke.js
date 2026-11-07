@@ -135,9 +135,9 @@ export function nukeBlast(pos, s = 1, opts = {}) {
 
   // the crater: wide and fairly shallow, with scorched ground all around
   if (!opts.noCrater && G.crater) {
-    const R0 = opts.craterRadius ?? 15 * s;
-    const R = height < R0 * 0.6 ? R0 : R0 * Math.max(0, 1 - height / (60 * s));
-    if (R > 1.5) G.crater(new THREE.Vector3(pos.x, g0 + 0.6, pos.z), 0, { craterRadius: R, rim: true, flat: 0.5, scorch: 46 * s * clamp(1 - height / (140 * s), 0.25, 1), maxCubes: Math.round(170 * Math.max(s, 0.5)), realBlocks: Math.round(8 * s) });
+    const R0 = opts.craterRadius ?? 38 * s;
+    const R = height < R0 * 0.6 ? R0 : R0 * Math.max(0, 1 - height / (90 * s));
+    if (R > 1.5) G.crater(new THREE.Vector3(pos.x, g0 + 0.6, pos.z), 0, { craterRadius: R, rim: true, flat: 0.55, scorch: 115 * s * clamp(1 - height / (160 * s), 0.25, 1), maxCubes: Math.round(220 * Math.max(s, 0.5)), realBlocks: Math.round(12 * s) });
   }
 
   // the fireball and its glow
@@ -254,6 +254,16 @@ export function updateNukes(dt) {
         FX.particle({ pos: _p.set(x, ground(x, z, g0) + rand(0.3, 1.5), z).clone(), vel: new THREE.Vector3(Math.cos(a) * rand(3, 8), rand(0.5, 2.5), Math.sin(a) * rand(3, 8)), color: [0xb7a68a, 0x9c8a70, 0xcfc4b0][(Math.random() * 3) | 0], size: rand(1.4, 3) * Math.max(0.6, s), life: rand(1.6, 2.8), gravity: -0.4, drag: 1.2, grow: 1.6, shrink: false, opacity: 0.55, floor: false, spin: 0.6 });
       }
     }
+    // the blast tears up the ground as it passes (pockmarks), and flattens the forest
+    if (rw < Rmax * 0.55 && t < 3) {
+      b.pockT = (b.pockT || 0) + dt * 30 * s;
+      while (b.pockT > 1) {
+        b.pockT--;
+        const a = rand(0, Math.PI * 2), r = rw * rand(0.75, 1), x = pos.x + Math.cos(a) * r, z = pos.z + Math.sin(a) * r;
+        if (G.crater) G.crater(new THREE.Vector3(x, ground(x, z, g0) + 0.3, z), 0, { craterRadius: rand(1.5, 3.6) * Math.max(0.6, s) * (1.2 - r / Rmax), rim: false, maxCubes: 3, realBlocks: 0 });
+      }
+    }
+    if (G.blowTrees && rw > (b.treeR || 0) + 4 && rw < Rmax * 0.7) { G.blowTrees(pos.x, pos.z, rw, pos, 35 * s); b.treeR = rw; }
     // shock ring: puffs that hug the ground, racing out and fading
     const shockA = clamp(1 - t / 3, 0, 1);
     b.shock.visible = shockA > 0;

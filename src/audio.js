@@ -133,6 +133,7 @@ function voice(dst, f0, f1, dur, vol, formants = [700, 1150]) {
   o.start(t); o.stop(t + dur + 0.05);
 }
 const R = (a, b) => a + Math.random() * (b - a);
+let engineNode = null;
 
 export const sfx = {
   // ---------------- big stuff
@@ -211,6 +212,26 @@ export const sfx = {
   hiss(pos = null) { const o = out(pos, 40, 2); if (!o) return; noise(o, 1.8, 4000, 0.5, 0.15, 'highpass'); },
   whistle(dur = 1.2, pos = null) { const o = out(pos, 200, dur); if (!o) return; tone(o, 'sine', 1800, 500, dur, 0.06); },
   beep(pos = null) { const o = out(pos, 25, 0.1); if (!o) return; tone(o, 'square', 1500, 1500, 0.07, 0.06); },
+  // the engine of what you're driving: one sound that follows your speed
+  engine(on, speed = 0) {
+    if (!ctx) return;
+    if (!engineNode && on) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth';
+      const o2 = ctx.createOscillator(); o2.type = 'square';
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 2;
+      const g = ctx.createGain(); g.gain.value = 0;
+      const g2 = ctx.createGain(); g2.gain.value = 0.35;
+      o.connect(f); o2.connect(g2); g2.connect(f); f.connect(g); g.connect(master);
+      o.start(); o2.start();
+      engineNode = { o, o2, f, g };
+    }
+    if (!engineNode) return;
+    const t = ctx.currentTime;
+    engineNode.g.gain.setTargetAtTime(on ? 0.05 + Math.min(0.05, speed * 0.0016) : 0, t, 0.12);
+    engineNode.o.frequency.setTargetAtTime(38 + speed * 3.6, t, 0.08);
+    engineNode.o2.frequency.setTargetAtTime(19 + speed * 1.8, t, 0.08);
+    engineNode.f.frequency.setTargetAtTime(300 + speed * 35, t, 0.1);
+  },
   // air-raid siren while a nuke is on its way (your own sound, centred)
   siren(dur = 3) {
     const o = out(null, 0, dur + 0.3, true); if (!o) return;

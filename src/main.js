@@ -2,17 +2,21 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { G, updatePopups, updateToast, toast, clamp } from './core.js';
-import { initAudio, toggleMute, setListener, setVolume, setAudioPaused } from './audio.js';
+import { initAudio, toggleMute, setListener, setVolume, setAudioPaused, sfx } from './audio.js';
 import { input, press, release, addWheel, endFrame, clearInput, capturing, ctl, bindText } from './input.js';
 import { S, setSetting, onSetting, applyAll } from './settings.js';
 import { updateGrabFx, rotateHeld, line } from './tools/grab.js';
 import { initFx, updateFx } from './fx.js';
 import { initNuke, updateNukes } from './nuke.js';
 import { updateBuildings } from './buildings.js';
+import { toggleVehicle, updateVehicle } from './vehicles.js';
+import { updateBubbles } from './dummy.js';
+import { net, updateNet, doAction, shareHeld, tugPlayer, flingPlayer, withSeed, shareMap, hostRoom, joinRoom } from './net.js';
+G.shareMap = shareMap;
 import * as Items from './items.js';
 import { Player } from './player.js';
 import { loadMap, updateMap, applyTime } from './map.js';
-import { TOOL, updateProjectiles, updateBlackHoles } from './tools/index.js';
+import { TOOL, updateProjectiles, updateBlackHoles, updateTornados, updateQuake, updateStorms } from './tools/index.js';
 import { initViewmodel, renderViewmodel } from './viewmodel.js';
 import { VoxelBroadphase } from './terrain.js';
 import { UI, buildHotbar, selectSlot, cycleTool, currentTool, openMenu, closeMenu, initMenu, updateHud } from './ui.js';
@@ -266,6 +270,7 @@ function gameActions(dt) {
   if (input.tap('prevTool')) cycleTool(-1);
   if (input.tap('nextTool')) cycleTool(1);
   if (input.tap('fly')) { G.player.flying = !G.player.flying; toast(G.player.flying ? `Fly mode ON (${bindText('jump', 1)} up, ${bindText('sprint', 1)} down)` : 'Fly mode OFF'); }
+  if (input.tap('interact') && !toggleVehicle()) toast('Nothing to get into here (walk up to a car)');
   if (input.tap('slowmo')) { G.timeScale = G.timeScale < 1 ? 1 : 0.3; toast(G.timeScale < 1 ? 'SLOW-MO' : 'Normal speed'); }
   if (input.tap('clear')) { for (const ent of [...G.ents]) if (ent.spawned) Items.removeEnt(ent, true); for (const d of [...G.dummies]) if (d.spawned) d.remove(); toast('Cleared spawned stuff'); }
   if (input.tap('resetMap')) { loadMap(G.mapId); toast('Map reset'); }
@@ -288,6 +293,22 @@ function gameActions(dt) {
   //  click: drop what you hold (hooked: let go), otherwise use your tool
   //  the grappling hook is a tool: with it, click hooks the ground / walls
   const held = G.grab;
+  // in a room: grab another player with your Fling Line (they go where you pull, F throws them)
+  if (G.grabRemote) {
+    const gr = G.grabRemote;
+    if (!net.players.has(gr.id)) G.grabRemote = null;
+    else {
+      const pt = G.aim.start.clone().addScaledVector(G.aim.dir, gr.dist);
+      gr.t = (gr.t || 0) - dt;
+      if (gr.t <= 0) { gr.t = 1 / 15; tugPlayer(gr.id, pt); }
+      if (input.tap('grab')) { flingPlayer(gr.id, G.aim.dir.clone().multiplyScalar(26).add(new THREE.Vector3(0, 4, 0))); G.grabRemote = null; useLock = true; sfx.fling(); return; }
+      if (input.tap('use')) { G.grabRemote = null; useLock = true; return; }
+    }
+  }
+  if (input.tap('grab') && !held && net.active) {
+    const h = raycastPlayers();
+    if (h) { G.grabRemote = { id: h.id, dist: h.dist }; sfx.grab(); return; }
+  }
   if (input.tap('grab')) {
     if (held) { line.throwIt(); useLock = true; }
     else if (tool.cancel && tool.cancel()) { /* cancelled a half-made rope / weld */ }
@@ -299,7 +320,7 @@ function gameActions(dt) {
       useLock = false;
       // recoil only when the tool really fired (its cooldown started)
       const cd0 = tool.cd || 0;
-      if (tool.down) tool.down();
+      if (tool.down) doAction('down', tool, () => tool.down());
       if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1);
     }
   }
@@ -308,9 +329,31 @@ function gameActions(dt) {
   if (input.tap('anchor') && G.grab) line.anchor();
   line.update(dt, input, tool.id === 'hands');
   if (tool.update) tool.update(dt, input);
-  if (input.held('use') && !useLock && !G.grab && tool.held) { const cd0 = tool.cd || 0; tool.held(dt); if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1); }
+  if (input.held('use') && !useLock && !G.grab && tool.held) {
+    const cd0 = tool.cd || 0;
+    // (in a room, held tools are shared 10 times a second)
+    tool.held(dt);
+    if (net.active) { heldAcc += dt; if (heldAcc >= 0.1) { shareHeld(tool, heldAcc); heldAcc = 0; } }
+    if ((tool.cd || 0) > cd0 + 1e-6) G.recoil(1);
+  }
+  G.currentToolId = tool.id;
 }
 let useLock = false; // after a throw, holding the button doesn't also fire the tool
+let heldAcc = 0;
+function raycastPlayers() {
+  let best = null;
+  for (const p of net.players.values()) {
+    const to = p.pos.clone().sub(G.aim.start), d = to.length();
+    if (d > 30) continue;
+    const off = to.clone().sub(G.aim.dir.clone().multiplyScalar(to.dot(G.aim.dir))).length();
+    if (to.dot(G.aim.dir) > 0 && off < 1.3 && (!best || d < best.dist)) best = { id: p.id, dist: d };
+  }
+  return best;
+}
+G.toolById = (id) => TOOL[id];
+// rooms: maps load the same everywhere (same random numbers); NPCs can be switched off
+G.loadMapNet = (id) => { withSeed(net.mapSeed, () => loadMap(id)); if (net.active && !net.npcs) for (const d of [...G.dummies]) d.remove(); };
+G.reloadMapForNet = () => G.loadMapNet(G.mapId);
 
 // Awake budget: when lots of things are moving at once, the slowest ones are put to sleep
 // (anything that gets hit wakes up again). Keeps big messes from grinding the game down.
@@ -393,6 +436,7 @@ function frame() {
     if (G.timers[i].t <= G.time) { const t = G.timers[i]; G.timers.splice(i, 1); t.fn(); }
   }
 
+  if (G.vehicle) updateVehicle(dt, pin);
   G.player.update(rdt, pin);
   Items.updateEnts(dt);
   Items.updateFirePatches(dt);
@@ -407,12 +451,15 @@ function frame() {
   }
   updateProjectiles(dt);
   updateBlackHoles(dt);
+  updateTornados(dt); updateQuake(dt); updateStorms(dt);
   updateMap(dt);
   updateFx(dt);
   updateNukes(dt);
   updateBuildings(dt);
   updateUnderground(rdt);
   updatePopups(rdt);
+  updateBubbles(rdt);
+  updateNet(rdt);
   updateToast(rdt);
   updateHud(rdt);
   updateGrabFx(dt);
@@ -427,10 +474,10 @@ function frame() {
 
   endFrame();
   renderer.render(scene, camera);
-  renderViewmodel(renderer);
+  if (!G.vehicle) renderViewmodel(renderer);
   needRender = false;
 }
 frame();
 window.__G = G; // handy for debugging in the console
 window.__CANNON = CANNON;
-window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input, isPaused };
+window.__T = { TOOL, UI, Items, loadMap, selectSlot, currentTool, input, isPaused, net, hostRoom, joinRoom };

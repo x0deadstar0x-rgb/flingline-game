@@ -142,6 +142,36 @@ export function poseHumanoid(meshes, s, origin, yaw, phase, amt, opts = {}) {
 }
 
 let dummyId = 1;
+// ---- speech bubbles: a few words over someone's head
+const bubbles = [];
+const LINES = {
+  hurt: ['Ow!', 'Hey!', 'Ouch!', 'Stop it!', 'What was that for?!', 'Rude!'],
+  flee: ['AAAH!', 'Run!', 'Help!', 'Nope nope nope', 'Get away!', 'Not again!'],
+  hi: ['Hi!', 'Hello!', 'Hey there!', 'Nice day!', 'Yo!', 'Howdy!'],
+  chat: ['Did you hear that?', 'Lovely weather', 'I like your hat', 'So anyway…', 'Haha, true', 'No way!', 'Exactly!'],
+  wow: ['Whoa…', 'Did you see that?!', 'That was huge!', 'Cool crater', 'Someone call the fire brigade'],
+  up: ['Ugh…', 'My back…', 'I\'m okay!', 'That hurt', 'Again?!'],
+  fight: ['That\'s it!', 'Come here!', 'Take that!', 'You asked for it!'],
+  follow: ['Wait up!', 'Where are we going?', 'Can I come?', 'Show me something cool'],
+  dance: ['♪ ♫', '♫ la la la ♪', 'Dance party!', '♪ ♪ ♪'],
+  fire: ['HOT HOT HOT!', 'I\'M ON FIRE!', 'WATER!'],
+  scared: ['Don\'t shoot!', 'Please no!', 'Hands up!'],
+};
+const pickLine = (a) => a[(Math.random() * a.length) | 0];
+export function updateBubbles(dt) {
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.t += dt;
+    const d = b.who;
+    if (b.t > b.life || d.dead || !G.dummies.has(d)) { b.el.remove(); bubbles.splice(i, 1); if (d.bubble === b) d.bubble = null; continue; }
+    const head = d.center().add(new THREE.Vector3(0, (d.state === 'standing' ? 1.25 : 0.7) * d.s, 0));
+    const p = head.project(G.camera);
+    const vis = p.z < 1 && G.camera.position.distanceTo(head) < 32;
+    b.el.style.opacity = vis ? String(Math.min(1, (b.life - b.t) / 0.4)) : '0';
+    b.el.style.transform = `translate(-50%,-100%) translate(${(p.x * 0.5 + 0.5) * window.innerWidth}px,${(-p.y * 0.5 + 0.5) * window.innerHeight}px)`;
+  }
+}
+
 export class Dummy {
   constructor(pos, variant = 'normal', opts = {}) {
     this.id = dummyId++;
@@ -168,6 +198,9 @@ export class Dummy {
     this.deadT = 0;       // >0 while dead (counts up)
     this.lastHurt = -99;
     this.home = pos.clone();
+    // everyone's a bit different
+    this.traits = { brave: Math.random(), curious: Math.random(), friendly: Math.random(), dancer: Math.random() < 0.3, chatty: Math.random() };
+    this.angryAt = -99; this.scaredAt = -99;
     this.state = null;
     this.frozen = 0;
     this.downTime = 0;
@@ -180,6 +213,22 @@ export class Dummy {
       this.knock(null);
       this.tieBalloons(3);
     }
+  }
+
+  // say something (only if you're close enough to read it, and not too often)
+  say(kind, force = false) {
+    if (this.dead || !G.camera || this.cfg.ai === 'zombie' && kind !== 'zombie') return;
+    if (!force && G.time - (this.lastSaid || -99) < 3.5) return;
+    if (G.camera.position.distanceTo(this.center()) > 30) return;
+    if (bubbles.length >= 6) { const old = bubbles.shift(); old.el.remove(); if (old.who.bubble === old) old.who.bubble = null; }
+    this.lastSaid = G.time;
+    if (this.bubble) { this.bubble.el.remove(); bubbles.splice(bubbles.indexOf(this.bubble), 1); }
+    const el = document.createElement('div');
+    el.className = 'bubble';
+    el.textContent = kind === 'zombie' ? 'Braaains…' : pickLine(LINES[kind] || LINES.chat);
+    document.getElementById('popups').appendChild(el);
+    this.bubble = { el, who: this, t: 0, life: 2.2 };
+    bubbles.push(this.bubble);
   }
 
   // feet position for drawing (smoothed between physics steps)
@@ -299,6 +348,15 @@ export class Dummy {
 
   // dmg = health damage; push = optional knock velocity (defaults from dmg + dir)
   hurt(dmg, dir, push) {
+    // was it you? (you're aiming this way, not too far off)
+    if (G.player && dmg > 2) {
+      const pp = G.player.pos(), c = this.center();
+      const to = c.clone().sub(pp), d = to.length();
+      if (d < 70 && G.aim && G.aim.dir.dot(to.normalize()) > 0.82) {
+        if (this.traits.brave > 0.62 && this.hp - dmg > this.maxHp * 0.3) { this.angryAt = G.time; this.say('fight', true); }
+        else { this.scaredAt = G.time; this.say(Math.random() < 0.5 ? 'hurt' : 'flee', true); }
+      } else if (dmg > 8) this.say('hurt');
+    }
     if (this.state === 'standing') this.knock(push || (dir ? dir.clone().multiplyScalar(Math.min(dmg * 0.15, 12)) : null));
     else { if (push) this.knock(push); if (dmg > 8) sfx.oof(this.center(), this.pitch); }
     this.damageHp(dmg);
@@ -387,6 +445,7 @@ export class Dummy {
     this.yaw = rand(0, Math.PI * 2);
     if (this.ai.group) this.endChat();
     this.ai.mode = 'idle'; this.ai.t = rand(0.5, 2); this.ai.goal = null;
+    if (Math.random() < 0.5) this.say('up');
     sfx.pop(feet);
     FX.smoke(feet.clone().add(new THREE.Vector3(0, 0.3, 0)), 4, 0xd9cfb8, 0.5);
   }
@@ -552,6 +611,10 @@ export class Dummy {
     if (this.burn > 0) return { pos: feet.clone().add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1))), burning: true };
     if (G.time - G.lastBoom.time < 4 && G.lastBoom.pos.distanceTo(feet) < 28) return { pos: G.lastBoom.pos };
     if (G.dangers) for (const dg of G.dangers) if (dg.until > G.time && dg.pos.distanceTo(feet) < dg.r) return { pos: dg.pos };
+    // bullets flying nearby
+    if (G.lastShot && G.time - G.lastShot.time < 1.5 && G.lastShot.pos.distanceTo(feet) < 9 + this.traits.brave * -5 + 5) return { pos: G.lastShot.pos };
+    // you hurt me: get away from you (unless I'm the brave sort)
+    if (G.time - this.scaredAt < 8 && G.player) return { pos: G.player.pos() };
     if (G.firePatches) for (const f of G.firePatches) if (f.pos.distanceTo(feet) < f.r + 5) return { pos: f.pos };
     for (const h of G.blackholes) if (h.mesh && h.mesh.position.distanceTo(feet) < 22) return { pos: h.mesh.position };
     if (this.cfg.ai !== 'zombie') {
@@ -596,7 +659,20 @@ export class Dummy {
       else { this.updateSeated(dt); return; }
     }
 
-    if (kind === 'zombie' && pp) {
+    if (kind !== 'zombie' && pp && G.time - this.angryAt < 9 && !threat) {
+      // you hurt me and I'm not scared of you: here I come
+      const to = pp.clone().sub(feet).setY(0), d = to.length();
+      want.copy(to.normalize()); speed = this.cfg.speed * 2.1;
+      pose.armsUp = d < 4;
+      ai.shove = (ai.shove || 0) - dt;
+      if (d < 1.5 * s + 0.6 && ai.shove <= 0) {
+        ai.shove = 1.1;
+        G.player.fling(to.normalize().multiplyScalar(8).add(new THREE.Vector3(0, 4, 0)));
+        sfx.whack(feet); this.say('fight');
+        G.shake = Math.max(G.shake, 0.3);
+      }
+      if (d > 45) this.angryAt = -99;
+    } else if (kind === 'zombie' && pp) {
       // chase whoever is closest: you, or a (living, standing) dummy
       ai.pickT = (ai.pickT || 0) - dt;
       if (ai.pickT <= 0 || (ai.prey && (ai.prey.dead || ai.prey.state !== 'standing' || ai.prey.deadT > 0))) {
@@ -629,6 +705,7 @@ export class Dummy {
       if (ai.mode === 'chat') this.endChat();
       if (ai.carry) this.dropCarry();
       if (ai.seat) this.freeSeat();
+      if (ai.mode !== 'flee') this.say(threat.burning ? 'fire' : 'flee');
       ai.mode = 'flee'; ai.t = rand(1.5, 3);
       if (threat.burning) {
         if (Math.random() < dt * 2) ai.dir.set(rand(-1, 1), 0, rand(-1, 1)).normalize();
@@ -661,6 +738,7 @@ export class Dummy {
         if (grp) grp.members = grp.members.filter((o) => !o.dead && o.state === 'standing' && o.ai.group === grp && o.ai.mode === 'chat');
         if (!grp || grp.members.length < 2 || G.time > grp.end) this.endChat();
         else {
+          if (Math.random() < dt * 0.22 * (0.4 + this.traits.chatty)) this.say('chat');
           // stand in a little circle around the middle of the group, facing in
           const c = new THREE.Vector3();
           for (const o of grp.members) c.add(o.origin());
@@ -719,6 +797,25 @@ export class Dummy {
       } else if (ai.mode === 'wave') {
         if (!pp || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
         else { face = pp; if (ai.t < 2.2) pose.wave = true; }
+      } else if (ai.mode === 'follow') {
+        // tag along behind you for a while
+        if (!pp || ai.t <= 0 || pp.distanceTo(feet) > 40) { ai.mode = 'idle'; ai.t = rand(1, 3); }
+        else {
+          const to = pp.clone().sub(feet).setY(0), d = to.length();
+          if (d > 3.5) { want.copy(to.normalize()); speed = this.cfg.speed * (d > 8 ? 1.9 : 1.2); } else face = pp;
+        }
+      } else if (ai.mode === 'dance') {
+        pose.armsUp = Math.sin(G.time * 6 + this.id) > 0;
+        pose.headYaw = Math.sin(G.time * 4) * 0.6;
+        this.yaw += dt * 3.2;
+        if (Math.random() < dt * 4 && grounded) { b.velocity.y = 3.2; ai.jumpT = 0.25; this.hover = null; }
+        if (ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); }
+      } else if (ai.mode === 'look') {
+        // go and have a look at what blew up
+        const to = ai.goal ? ai.goal.clone().sub(feet).setY(0) : null;
+        if (!to || ai.t <= 0) { ai.mode = 'idle'; ai.t = rand(1, 3); ai.goal = null; }
+        else if (to.length() > 6) { want.copy(to.normalize()); speed = this.cfg.speed; }
+        else { face = ai.goal; pose.headYaw = Math.sin(G.time * 2 + this.id) * 0.4; if (!ai.said) { ai.said = true; this.say('wow'); } }
       } else {
         // idle: look around, then decide what to do next
         ai.look += dt;
@@ -730,7 +827,7 @@ export class Dummy {
         const d = pp.distanceTo(feet);
         if (d < 7 && d > 2) {
           const look = G.aim.dir.dot(feet.clone().sub(pp).normalize());
-          if (look > 0.9) { ai.mode = 'wave'; ai.t = 2.6; ai.lastWave = G.time; ai.goal = null; }
+          if (look > 0.9) { ai.mode = 'wave'; ai.t = 2.6; ai.lastWave = G.time; ai.goal = null; this.say('hi'); }
         }
       }
       if (kind === 'ninja') {
@@ -938,6 +1035,15 @@ export class Dummy {
   // pick the next thing to do: walk somewhere, chat with someone nearby, wave at you, or keep looking around
   decide(feet, pp) {
     const ai = this.ai;
+    // curious ones go and look at something that just blew up
+    if (G.lastBoom && G.time - G.lastBoom.time > 3 && G.time - G.lastBoom.time < 25 && Math.random() < this.traits.curious * 0.7) {
+      const d = G.lastBoom.pos.distanceTo(feet);
+      if (d < 45 && d > 7 && !(ai.lookedAt === G.lastBoom.time)) { ai.lookedAt = G.lastBoom.time; ai.mode = 'look'; ai.goal = G.lastBoom.pos.clone(); ai.t = 14; ai.said = false; return; }
+    }
+    // friendly ones sometimes tag along with you
+    if (pp && Math.random() < this.traits.friendly * 0.12 && pp.distanceTo(feet) < 14) { ai.mode = 'follow'; ai.t = rand(10, 20); this.say('follow'); return; }
+    // dancers dance
+    if (this.traits.dancer && Math.random() < 0.18) { ai.mode = 'dance'; ai.t = rand(4, 9); this.say('dance'); return; }
     const r = Math.random();
     if (r < 0.3) {
       // join a chat that's already going (up to 5 people), or start one with someone close

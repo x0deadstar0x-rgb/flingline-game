@@ -8,8 +8,11 @@
     "dev": "esbuild src/main.js --bundle --format=iife --outfile=game.bundle.js --watch"
   },
   "devDependencies": {
+    "cannon-es": "0.20.0",
     "esbuild": "0.24.0",
-    "three": "0.170.0",
-    "cannon-es": "0.20.0"
+    "three": "0.170.0"
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
   }
 }

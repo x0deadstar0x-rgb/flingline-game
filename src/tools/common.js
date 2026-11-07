@@ -32,6 +32,7 @@ export function spreadDir(dir, s) {
 // Bullet-style hit: impulse + damage + effects. imp = velocity kick for a light object.
 export function bulletHit(hit, dir, dmg, imp, color = 0xffe066) {
   const b = hit.body;
+  G.lastShot = { pos: hit.point.clone(), time: G.time }; // people nearby duck and run
   const e = b.ent;
   FX.sparks(hit.point, hit.normal, color, 6, 5);
   if (!e) {

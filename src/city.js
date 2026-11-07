@@ -40,7 +40,7 @@ export function makeBuilding(o) {
   const roofJ = floors * FH;
   const antenna = o.antenna || 0;
   const NX = W + 2 * M, NZ = D + 2 * M, NY = roofJ + 3 + 7 + antenna + 2;
-  const b = newBuilding(o.cx - NX * BV / 2, -BV, o.cz - NZ * BV / 2, NX, NY, NZ);
+  const b = newBuilding(o.cx - NX * BV / 2, o.y0 ?? -BV, o.cz - NZ * BV / 2, NX, NY, NZ);
   const wallHex = pick(rng, st.walls);
   const [gA, gB] = pick(rng, st.glass);
   const WALL = o.style === 'brick' ? brick(wallHex) : concrete(wallHex);

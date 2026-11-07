@@ -5,15 +5,16 @@ import { boomTools, updateBlackHoles } from './explosives.js';
 import { rayTools } from './rays.js';
 import { buildTools } from './construct.js';
 import { digTools } from './dig.js';
+import { funTools, updateTornados, updateQuake, updateStorms } from './fun.js';
 import { updateProjectiles } from './common.js';
 
-export const TOOLS = [handsTool, grappleTool, ...gunTools, ...boomTools, ...rayTools, ...buildTools, ...digTools];
+export const TOOLS = [handsTool, grappleTool, ...gunTools, ...boomTools, ...rayTools, ...buildTools, ...digTools, ...funTools];
 export const TOOL = Object.fromEntries(TOOLS.map((t) => [t.id, t]));
 export const TOOL_GROUPS = [
-  ['Hands & Moving', [handsTool, grappleTool]], ['Weapons', gunTools], ['Explosives', boomTools], ['Rays & Forces', rayTools], ['Build', buildTools], ['Dig & Blocks', digTools],
+  ['Hands & Moving', [handsTool, grappleTool]], ['Weapons', gunTools], ['Explosives', boomTools], ['Rays & Forces', rayTools], ['Build', buildTools], ['Dig & Blocks', digTools], ['Weather & Wild', funTools],
 ];
 export const DEFAULT_HOTBAR = ['hands', 'grapple', 'blaster', 'rocket', 'tnt', 'flamer', 'blackhole', 'push', 'spawner', 'bat'];
-export { updateBlackHoles, updateProjectiles };
+export { updateBlackHoles, updateProjectiles, updateTornados, updateQuake, updateStorms };
 
 // ready-made hotbars (click one in the Tools menu to get all ten tools at once)
 export const PRESET_LOADOUTS = [
@@ -23,5 +24,6 @@ export const PRESET_LOADOUTS = [
   { name: 'Builder', tools: ['hands', 'spawner', 'weld', 'rope', 'balloon', 'thruster', 'clone', 'eraser', 'freeze', 'paint'] },
   { name: 'Mover', tools: ['hands', 'grapple', 'push', 'teleport', 'magnet', 'antigrav', 'balloon', 'thruster', 'bat', 'spawner'] },
   { name: 'Mad Scientist', tools: ['hands', 'blackhole', 'freeze', 'antigrav', 'grow', 'shrink', 'lightning', 'clone', 'teleport', 'paint'] },
+  { name: 'Disaster', tools: ['hands', 'tornado', 'quake', 'storm', 'meteors', 'superhole', 'nuke', 'jetpack', 'water', 'grapple'] },
   { name: 'Miner', tools: ['hands', 'drill', 'blocks', 'grapple', 'tnt', 'rocket', 'teleport', 'spawner', 'freeze', 'push'] },
 ];

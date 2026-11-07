@@ -143,7 +143,7 @@ export const CATALOG = [
   B('drum', 'Oil Drum', '🛢️', 'Boom', { shape: 'cyl', r: 0.45, h: 1.2, mat: 'tnt', tex: 'drum', explosive: { power: 0.7, impact: 14, hp: 40, fire: true } }),
   B('gas', 'Gas Canister', '🧯', 'Boom', { shape: 'cyl', r: 0.25, h: 1.0, mat: 'tnt', tex: 'gas', explosive: { power: 0.7, impact: 99, hp: 10, special: 'gas' } }),
   B('firework', 'Firework Box', '🎆', 'Boom', { shape: 'box', size: [0.4, 0.8, 0.4], mat: 'tnt', tex: 'firework', explosive: { power: 0.3, impact: 13, hp: 1, special: 'firework' } }),
-  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 8, nuke: 0.45 } }),
+  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 14, nuke: 0.45 } }),
   B('mine', 'Land Mine', '⚠️', 'Boom', { shape: 'cyl', r: 0.45, h: 0.14, mat: 'metal', color: 0x4a5a3a, explosive: { power: 0.9, impact: 0.8, hp: 1, mine: true } }),
   B('c4', 'C4 Pack', '📟', 'Boom', { shape: 'box', size: [0.5, 0.2, 0.35], mat: 'tnt', color: 0xd9d1b0, explosive: { power: 1.4, impact: 40, hp: 1 } }),
   // Balls
@@ -247,6 +247,21 @@ export const CATALOG = [
     { t: 'cyl', r: 0.38, h: 0.3, off: [-1.1, -0.35, 0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.38, h: 0.3, off: [1.1, -0.35, -0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
     { t: 'cyl', r: 0.38, h: 0.3, off: [-1.1, -0.35, -0.85], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('truck', 'Monster Truck', '🛻', 'Stuff', { shape: 'compound', mat: 'car', massMul: 1.2, parts: [
+    { t: 'box', size: [4.4, 1.0, 2.3], off: [0, 0.35, 0], color: 0xd62828 },
+    { t: 'box', size: [1.9, 0.9, 2.1], off: [-0.55, 1.3, 0], tex: 'window' },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [1.45, -0.35, 1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [-1.45, -0.35, 1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [1.45, -0.35, -1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.78, h: 0.55, off: [-1.45, -0.35, -1.25], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('kart', 'Go-Kart', '🏎️', 'Stuff', { shape: 'compound', mat: 'car', massMul: 0.6, parts: [
+    { t: 'box', size: [2.0, 0.3, 1.2], off: [0, 0, 0], color: 0x2a9d8f },
+    { t: 'box', size: [0.5, 0.5, 0.6], off: [-0.45, 0.35, 0], color: 0x264653 },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [0.75, -0.12, 0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, 0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d },
+    { t: 'cyl', r: 0.24, h: 0.22, off: [-0.75, -0.12, -0.62], rot: [Math.PI / 2, 0, 0], color: 0x1d1d1d }] }),
+  B('trampoline', 'Trampoline', '🤸', 'Fun', { shape: 'box', size: [3, 0.35, 3], mat: 'rubber', color: 0x3a86ff, massMul: 4 }),
   B('vending', 'Vending Machine', '🥤', 'Stuff', { shape: 'compound', mat: 'appliance', parts: [
     { t: 'box', size: [1.1, 2.0, 0.9], off: [0, 0, 0], color: 0xd2232a },
     { t: 'box', size: [0.7, 1.2, 0.05], off: [-0.12, 0.25, 0.46], tex: 'window' }] }),
@@ -402,8 +417,10 @@ export function createEnt(def, pos, opts = {}) {
     body.sleepSpeedLimit = 0.5; body.sleepTimeLimit = 0.4;
     if (volumeOf(def) * sc ** 3 < 0.06) { body.collisionFilterGroup = GROUP.DEBRIS; body.collisionFilterMask = ~GROUP.DEBRIS; }
   }
+  // an id that's the same on every computer in a room (map things and things from shared actions)
+  const nid = G.netEvent ? G.netEvent.base + '#' + (G.netEvent.n++) : (G.mapBuilding ? 'm' + (G.mapNid = (G.mapNid || 0) + 1) : null);
   const ent = {
-    id: nextId++, kind: 'item', def, mat, body, mesh, vol: volumeOf(def) * sc ** 3,
+    id: nextId++, nid, kind: 'item', def, mat, body, mesh, vol: volumeOf(def) * sc ** 3,
     hp: def.explosive ? def.explosive.hp : (def.hp ?? mat.hp),
     gen: opts.gen ?? 0, born: G.time, spawned: !!opts.spawned, scale: sc,
     frozen: 0, antigrav: 0, thrusters: [], wet: false,
@@ -413,6 +430,7 @@ export function createEnt(def, pos, opts = {}) {
   G.world.addBody(body);
   G.scene.add(mesh);
   G.ents.add(ent);
+  if (nid) { if (!G.entByNid) G.entByNid = new Map(); G.entByNid.set(nid, ent); }
   if (opts.sleep) body.sleep();
   syncEnt(ent);
   enforceLimit();
@@ -435,6 +453,7 @@ function enforceLimit() {
 export function removeEnt(ent, quiet = false) {
   if (!ent || ent.dead) return;
   ent.dead = true;
+  if (ent.nid && G.entByNid) G.entByNid.delete(ent.nid);
   if (G.onRemove) G.onRemove(ent);
   for (let i = G.ropes.length - 1; i >= 0; i--) {
     const r = G.ropes[i];
