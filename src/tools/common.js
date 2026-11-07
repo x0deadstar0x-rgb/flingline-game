@@ -85,7 +85,7 @@ export function updateProjectiles(dt) {
     if (p.collide && p.onHit) {
       const h = raycast(_prev, p.pos, AIM_MASK);
       if (h) { p.onHit(h, p); done = true; }
-      else if (p.pos.y < G.waterY && p.water !== false) { p.onHit({ point: p.pos.clone().setY(G.waterY), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
+      else if (p.water !== false && p.pos.y < G.waterAt(p.pos.x, p.pos.z)) { p.onHit({ point: p.pos.clone().setY(G.waterAt(p.pos.x, p.pos.z)), normal: new THREE.Vector3(0, 1, 0), body: null, water: true }, p); done = true; }
     }
     if (!done && p.t >= p.life) { if (p.end) p.end(p.pos.clone(), p); done = true; }
     if (done) { if (p.mesh) G.scene.remove(p.mesh); G.projectiles.splice(i, 1); }

@@ -138,7 +138,7 @@ export const CATALOG = [
   B('drum', 'Oil Drum', '🛢️', 'Boom', { shape: 'cyl', r: 0.45, h: 1.2, mat: 'tnt', tex: 'drum', explosive: { power: 0.7, impact: 14, hp: 40, fire: true } }),
   B('gas', 'Gas Canister', '🧯', 'Boom', { shape: 'cyl', r: 0.25, h: 1.0, mat: 'tnt', tex: 'gas', explosive: { power: 0.7, impact: 99, hp: 10, special: 'gas' } }),
   B('firework', 'Firework Box', '🎆', 'Boom', { shape: 'box', size: [0.4, 0.8, 0.4], mat: 'tnt', tex: 'firework', explosive: { power: 0.3, impact: 13, hp: 1, special: 'firework' } }),
-  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60 } }),
+  B('nuke', 'Nuke Barrel', '☢️', 'Boom', { shape: 'cyl', r: 0.6, h: 1.5, mat: 'tnt', tex: 'nuke', explosive: { power: 4, impact: 25, hp: 60, crater: 10 } }),
   B('mine', 'Land Mine', '⚠️', 'Boom', { shape: 'cyl', r: 0.45, h: 0.14, mat: 'metal', color: 0x4a5a3a, explosive: { power: 0.9, impact: 0.8, hp: 1, mine: true } }),
   B('c4', 'C4 Pack', '📟', 'Boom', { shape: 'box', size: [0.5, 0.2, 0.35], mat: 'tnt', color: 0xd9d1b0, explosive: { power: 1.4, impact: 40, hp: 1 } }),
   // Balls
@@ -597,7 +597,7 @@ export function detonate(ent, delay = 0) {
     if (ent.dead) return;
     const pos = tv(ent.body.position);
     removeEnt(ent, true);
-    explode(pos, ex.power * ent.scale ** 1.5, { fire: ex.fire });
+    explode(pos, ex.power * ent.scale ** 1.5, { fire: ex.fire, craterRadius: ex.crater ? ex.crater * ent.scale : undefined, rim: ex.crater ? true : undefined });
   });
 }
 
@@ -639,8 +639,8 @@ export function explode(pos, power = 1, opts = {}) {
   const vis = Math.min(Math.pow(power, 0.55), 3.2);
   FX.explosionFx(pos, vis);
   if (opts.fire) for (let i = 0; i < 18; i++) FX.particle({ pos, vel: new THREE.Vector3(rand(-8, 8), rand(5, 14), rand(-8, 8)), color: 0xff7a1a, size: 0.3, life: rand(1.5, 2.5), glow: true, add: true, gravity: 14, drag: 0.2 });
-  if (pos.y < G.waterY + 1.5) FX.splash(pos, 30, 1.6);
-  if (G.crater && !opts.quiet) G.crater(pos, power);
+  if (pos.y < G.waterAt(pos.x, pos.z) + 1.5) FX.splash(pos, 30, 1.6);
+  if (G.crater && !opts.quiet && !opts.noCrater) G.crater(pos, power, opts);
   sfx.explosion(Math.min(1.5, power), pos);
   if (power >= 3.5) { FX.flashAt(pos, 400, 0xffffff); document.getElementById('whiteflash').classList.add('on'); setTimeout(() => document.getElementById('whiteflash').classList.remove('on'), 120); }
   const pd = G.player ? G.player.pos().distanceTo(pos) : 99;
@@ -804,7 +804,7 @@ export function physicsForces() {
     const b = e.body;
     if (b.type !== CANNON.Body.DYNAMIC) continue;
     // buoyancy + water drag
-    const depth = G.waterY - b.position.y;
+    const depth = G.waterAt(b.position.x, b.position.z) - b.position.y;
     if (depth > -0.3) {
       const sub = clamp((depth + 0.3) / 0.8, 0, 1);
       const buoy = e.kind === 'ragpart' ? e.dummy.buoy : (e.frozen ? 1.4 : e.mat.buoy);
@@ -852,7 +852,7 @@ export function updateEnts(dt) {
     if (e.kind !== 'ragpart' && b.sleepState !== CANNON.Body.SLEEPING && b.type === CANNON.Body.DYNAMIC) syncEnt(e);
     if (e.burn > 0) updateBurn(e, dt);
     // splash when entering water
-    const inW = b.position.y < G.waterY;
+    const inW = b.position.y < G.waterAt(b.position.x, b.position.z);
     if (inW && !e.wet && b.velocity.length() > 4) { FX.splash(tv(b.position), 10, clamp(b.mass / 40, 0.5, 1.6)); sfx.splash(b.position); }
     e.wet = inW;
     if (e.frozen > 0) { e.frozen -= dt; if (e.frozen <= 0) unfreeze(e); }
@@ -877,7 +877,7 @@ export function updateEnts(dt) {
       sfx.fuse(b.position);
       if (e.fuse <= 0) { e.fuse = null; if (e.onFuse) e.onFuse(); else detonate(e, 0); }
     }
-    if (e.def.special === 'balloon' && b.position.y > 120) popBalloon(e);
+    if (e.def.special === 'balloon' && b.position.y > 700) popBalloon(e); // way up high, out of air
     if (e.gen >= 2 && G.time - e.born > 25) {
       const k = (G.time - e.born - 25);
       e.mesh.scale.setScalar(e.scale * Math.max(0.01, 1 - k));
@@ -1085,7 +1085,7 @@ export function checkBig(kind, pos, yaw) {
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
     const w = yawed(pos, x0 + (x1 - x0) * i / (N - 1), 0, z0 + (z1 - z0) * j / (N - 1), yaw);
     const h = raycastStatic(new THREE.Vector3(w.x, pos.y + 25, w.z), new THREE.Vector3(w.x, pos.y - 60, w.z));
-    if (!h || h.point.y < G.waterY) { miss++; continue; }
+    if (!h || h.point.y < G.waterAt(w.x, w.z)) { miss++; continue; }
     lo = Math.min(lo, h.point.y);
     if (h.point.y > hi) { hi = h.point.y; hiProp = !h.body.shapes.some((sh) => sh instanceof CANNON.Heightfield); }
   }
@@ -1216,7 +1216,7 @@ export function ignite(e, t = 8) {
   if (e.kind === 'dummybody' || e.kind === 'ragpart') { e.dummy.ignite(); return; }
   if (e.frozen) { unfreeze(e); return; }
   const f = FLAM[e.def.mat] || 0;
-  if (f <= 0 || e.body.position.y < G.waterY) return;
+  if (f <= 0 || e.body.position.y < G.waterAt(e.body.position.x, e.body.position.z)) return;
   if (e.def.special === 'balloon') { popBalloon(e); return; }
   if (e.def.explosive) {
     if (e.fuse == null && !e.detonating) e.fuse = rand(0.7, 1.5);
@@ -1232,7 +1232,7 @@ export function ignite(e, t = 8) {
 const _black = new THREE.Color(0x1a1410);
 function updateBurn(e, dt) {
   const b = e.body;
-  if (b.position.y < G.waterY) {
+  if (b.position.y < G.waterAt(b.position.x, b.position.z)) {
     e.burn = 0; G.burning--;
     FX.smoke(tv(b.position), 5, 0xdddddd, 0.6); sfx.sizzle(b.position);
     return;

@@ -61,7 +61,67 @@ export function createTerrain(opts, group, bodies) {
   return T;
 }
 
-export function clearTerrain() { T = null; G.terrain = null; }
+export function clearTerrain() { T = null; G.terrain = null; G.waterAt = noWater; }
+
+// ------------------------------------------------------------- water
+// Water only exists where the map has sea / lakes. Columns that start below the water level are
+// water; holes you dig next to water flood, holes dug inland stay dry.
+const noWater = () => -Infinity;
+G.waterAt = noWater;
+export function setupWater(level) {
+  if (!T) { G.waterAt = () => level; return null; }
+  const { N, lv } = T;
+  const wet = new Uint8Array(N * N);
+  // the texture is laid out [j][i] (row = j) so the shader can look it up by world x / z
+  const mask = new Uint8Array(N * N);
+  let edgeWet = 0, edges = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const k = i * N + j;
+    if (lv[k] * V < level) { wet[k] = 1; mask[j * N + i] = 255; }
+    if (i === 0 || j === 0 || i === N - 1 || j === N - 1) { edges++; if (wet[k]) edgeWet++; }
+  }
+  const tex = new THREE.DataTexture(mask, N, N, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  T.water = { level, wet, mask, tex, seaOutside: edgeWet > edges * 0.3 };
+  G.waterAt = waterAt;
+  return T.water;
+}
+// water surface height at x, z (or -Infinity where there is no water)
+export function waterAt(x, z) {
+  if (!T || !T.water) return -Infinity;
+  const i = Math.floor((x - T.x0) / V), j = Math.floor((T.z0 - z) / V);
+  if (i < 0 || j < 0 || i >= T.N || j >= T.N) return T.water.seaOutside ? T.water.level : -Infinity;
+  return T.water.wet[i * T.N + j] ? T.water.level : -Infinity;
+}
+// after digging: water flows into dug columns that touch water and are below the water level
+function flood(ia, ib, ja, jb) {
+  const W = T.water;
+  if (!W) return;
+  const { N, lv } = T;
+  const low = (k) => lv[k] * V < W.level;
+  const q = [];
+  for (let i = ia; i <= ib; i++) for (let j = ja; j <= jb; j++) {
+    const k = i * N + j;
+    if (W.wet[k] || !low(k)) continue;
+    const touches = (i === 0 || j === 0 || i === N - 1 || j === N - 1) ? W.seaOutside
+      : (W.wet[k - N] || W.wet[k + N] || W.wet[k - 1] || W.wet[k + 1]);
+    if (touches) { W.wet[k] = 1; q.push(k); }
+  }
+  let changed = q.length > 0;
+  while (q.length) {
+    const k = q.pop();
+    const i = Math.floor(k / N), j = k % N;
+    W.mask[j * N + i] = 255;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ni = i + di, nj = j + dj;
+      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+      const nk = ni * N + nj;
+      if (!W.wet[nk] && low(nk)) { W.wet[nk] = 1; q.push(nk); }
+    }
+  }
+  if (changed) W.tex.needsUpdate = true;
+}
 
 // height of the ground (top of the block column) at x, z
 export function terrainHeight(x, z) {
@@ -128,7 +188,8 @@ function blockColor(k, l) {
   if (T.under) return T.under(d, T.topc[k]);
   if (d <= 0) return T.topc[k];
   if (d <= T.soilDepth) return T.soil;
-  return T.rock;
+  if (l > T.bed + 8) return T.rock;
+  return 0x4a4c55; // deep bedrock
 }
 
 function buildChunk(ci, cj) {
@@ -254,7 +315,13 @@ export function carveTerrain(pos, R, opts = {}) {
     const d = Math.hypot(x - pos.x, z - pos.z);
     const Rc = R * (0.82 + 0.3 * hash(i * 7 + 3, j * 13 + 5)); // ragged blocky edge
     if (d > Rc * 1.25) continue;
-    if (d > Rc) { if (!burn[k]) { burn[k] = 1; markDirty(i, j); } continue; }
+    if (d > Rc) {
+      // a ring of thrown-up dirt around big craters
+      if (opts.rim && lv[k] <= T.orig[k] && hash(i * 3 + 1, j * 5 + 2) < 0.55) { lv[k] += 1; T.shape.setHeightValueAtIndex(i, j, lv[k] * V); if (lv[k] * V > T.shape.maxValue) T.shape.maxValue = lv[k] * V; }
+      if (!burn[k]) burn[k] = 1;
+      markDirty(i, j);
+      continue;
+    }
     const bottom = cy - Math.sqrt(Math.max(0, Rc * Rc - d * d)) * (opts.flat ?? 0.85);
     const nl = Math.max(T.bed, Math.floor(bottom / V));
     const l = lv[k];
@@ -269,6 +336,7 @@ export function carveTerrain(pos, R, opts = {}) {
     markDirty(i, j);
   }
   if (minL < Infinity) {
+    flood(Math.max(0, ia - 1), Math.min(N - 1, ib + 1), Math.max(0, ja - 1), Math.min(N - 1, jb + 1));
     T.shape.minValue = Math.min(T.shape.minValue, minL * V - 0.5);
     T.shape.updateBoundingSphereRadius();
     T.body.aabbNeedsUpdate = true;
@@ -340,7 +408,7 @@ export function updateCubes(dt) {
         if (Math.abs(c.v.y) < 2.5) { c.rest = true; c.r.set(0, c.r.y, 0); }
         c.v.y = -c.v.y * 0.25; c.v.x *= 0.5; c.v.z *= 0.5; c.w.multiplyScalar(0.4);
       }
-      if (G.waterY > -100 && c.p.y < G.waterY) c.v.multiplyScalar(0.9); // slows down in water
+      if (c.p.y < G.waterAt(c.p.x, c.p.z)) c.v.multiplyScalar(0.9); // slows down in water
     }
     const k = c.life > c.max - 0.6 ? Math.max(0.01, (c.max - c.life) / 0.6) : 1;
     _q.setFromEuler(_e.set(c.r.x, c.r.y, c.r.z));

@@ -7,7 +7,7 @@ import { createEnt, buildPrefab, spawnItem, ITEMS, removeEnt, removeRope, addRop
 import { spawnDummy } from './dummy.js';
 import * as FX from './fx.js';
 import { sfx } from './audio.js';
-import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain } from './terrain.js';
+import { createTerrain, terrainHeight, carveTerrain, updateTerrain, cubeBurst, updateCubes, clearCubes, clearTerrain, setupWater } from './terrain.js';
 
 let mapGroup = null;
 let mapBodies = [];
@@ -100,12 +100,27 @@ function pad(x, y, z, vel, color = 0x39ff9c) {
 function water1(level, size = 900) {
   const g = new THREE.PlaneGeometry(size, size, 70, 70);
   g.rotateX(-Math.PI / 2);
-  water = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2a8fd6, transparent: true, opacity: 0.82, flatShading: true, roughness: 0.25, metalness: 0.1 }));
+  const mat = new THREE.MeshStandardMaterial({ color: 0x2a8fd6, transparent: true, opacity: 0.82, flatShading: true, roughness: 0.25, metalness: 0.1 });
+  G.waterY = level;
+  const W = setupWater(level);
+  if (W && G.terrain) {
+    // only draw water over real sea / lake columns (dug holes inland stay dry)
+    const T = G.terrain;
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.wMask = { value: W.tex };
+      sh.uniforms.wRect = { value: new THREE.Vector4(T.x0, T.z0, T.W, W.seaOutside ? 1 : 0) };
+      sh.vertexShader = 'varying vec3 vWPos;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = 'uniform sampler2D wMask; uniform vec4 wRect; varying vec3 vWPos;\n' + sh.fragmentShader.replace('void main() {', `void main() {
+        vec2 wuv = vec2((vWPos.x - wRect.x) / wRect.z, (wRect.y - vWPos.z) / wRect.z);
+        if (wuv.x < 0.0 || wuv.y < 0.0 || wuv.x > 1.0 || wuv.y > 1.0) { if (wRect.w < 0.5) discard; }
+        else if (texture2D(wMask, wuv).r < 0.5) discard;`);
+    };
+  }
+  water = new THREE.Mesh(g, mat);
   water.position.y = level;
   water.receiveShadow = true;
   mapGroup.add(water);
   waterBase = Float32Array.from(g.attributes.position.array);
-  G.waterY = level;
 }
 
 function skyDome(top, bottom) {
@@ -153,13 +168,17 @@ function pallets(x, y, z, n = 3) { for (let i = 0; i < n; i++) put('pallet', x +
 
 // ------------------------------------------------------------- breakable terrain
 // The ground is made of 0.5 m block columns (terrain.js). Explosions carve blocky craters.
-function makeTerrain(opts) { createTerrain(opts, mapGroup, mapBodies); }
+const DIG_DEPTH = -40; // how deep you can dig (m)
+function makeTerrain(opts) { createTerrain({ ...opts, bedrock: Math.min(opts.bedrock ?? -8, DIG_DEPTH) }, mapGroup, mapBodies); }
 export function groundHeight(x, z) { return terrainHeight(x, z); }
 const DIRT = { id: 'dirtblock', name: 'Dirt Block', shape: 'box', size: [0.48, 0.48, 0.48], mat: 'dirt' };
 // explosion crater: a ragged blocky bowl, flying cubes, dust, and a few real blocks you can grab
+// Crater size grows with the blast: mini TNT ~1.3 m, grenade ~1.6 m, TNT ~1.9 m, C4 ~2.3 m,
+// mega TNT ~3.2 m (radius). Meteors and nukes pass their own size. Fire blasts are shallower.
+export function craterRadius(power) { return 1.9 * Math.pow(power, 0.55); }
 export function crater(pos, power, opts = {}) {
-  const R = opts.radius ?? 2.3 * Math.pow(power, 0.5);
-  const res = carveTerrain(pos, R, opts);
+  const R = opts.craterRadius ?? craterRadius(power);
+  const res = carveTerrain(pos, R, { rim: opts.rim ?? R >= 3.5, flat: opts.fire ? 0.6 : 0.85 });
   if (!res) return null;
   const at = new THREE.Vector3(pos.x, res.ground, pos.z);
   const cols = res.sample.length ? res.sample : [0x6b4f35];
@@ -173,7 +192,7 @@ export function crater(pos, power, opts = {}) {
   }
   return res;
 }
-G.crater = (pos, power) => crater(pos, power);
+G.crater = (pos, power, opts) => crater(pos, power, opts || {});
 
 // ------------------------------------------------------------- shared building helpers
 function stack(id, x, y, z, w, d, h, size = 1) { // hollow box of blocks
@@ -567,9 +586,10 @@ export function loadMap(id) {
   water = null; clouds = []; clearTerrain(); clearCubes(); G.groundAt = null;
   G.mapId = m.id;
   G.map = m;
-  G.killY = m.killY;
+  G.killY = Math.min(m.killY, DIG_DEPTH - 25); // below the deepest hole you can dig
   G.walkBound = m.walk;
   G.waterY = m.water;
+  G.waterAt = () => -Infinity;
   skyDome(m.sky[0], m.sky[1]);
   G.scene.fog = new THREE.Fog(m.fog[0], m.fog[1], m.fog[2]);
   m.build();
@@ -623,6 +643,9 @@ export function applyTime(mode) {
 
 const _padT = new WeakMap();
 export function updateMap(dt) {
+  // the sky and stars move with you, so there is no ceiling
+  if (sky && G.camera) sky.position.copy(G.camera.position);
+  if (stars && G.camera) stars.position.copy(G.camera.position);
   updateTerrain();
   updateCubes(dt);
   if (water) {

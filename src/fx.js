@@ -207,10 +207,12 @@ export function smoke(pos, n = 4, color = 0x777777, size = 0.6) {
 }
 
 export function splash(pos, n = 14, scale = 1) {
+  const w = G.waterAt ? G.waterAt(pos.x, pos.z) : -Infinity;
+  const wy = w > -1e9 ? w : pos.y;
   for (let i = 0; i < n; i++) {
-    particle({ pos: pos.clone().setY(G.waterY + 0.1), vel: new THREE.Vector3(rand(-3, 3) * scale, rand(4, 9) * scale, rand(-3, 3) * scale), color: [0xbfe9ff, 0xffffff, 0x7fd0f5][i % 3], size: rand(0.12, 0.3) * scale, life: rand(0.5, 1), gravity: 18, drag: 0.3, floor: false });
+    particle({ pos: pos.clone().setY(wy + 0.1), vel: new THREE.Vector3(rand(-3, 3) * scale, rand(4, 9) * scale, rand(-3, 3) * scale), color: [0xbfe9ff, 0xffffff, 0x7fd0f5][i % 3], size: rand(0.12, 0.3) * scale, life: rand(0.5, 1), gravity: 18, drag: 0.3, floor: false });
   }
-  ring(pos.clone().setY(G.waterY + 0.05), 2.5 * scale, 0xdff6ff, 0.6);
+  ring(pos.clone().setY(wy + 0.05), 2.5 * scale, 0xdff6ff, 0.6);
 }
 
 export function confetti(pos, n = 50, speed = 12) {

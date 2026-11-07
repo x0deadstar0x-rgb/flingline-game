@@ -94,7 +94,8 @@ export class Player {
     const pv = plat ? plat.velocity : { x: 0, y: 0, z: 0 };
     this.grounded = !!hit && b.velocity.y - pv.y < 6;
     if (this.grounded) this.airJumps = 1;
-    const swim = p.y < G.waterY + 0.4;
+    const wl = G.waterAt(p.x, p.z);
+    const swim = p.y < wl + 0.4;
     // move
     const mv = new THREE.Vector3();
     if (input.f) mv.add(fwdFlat);
@@ -126,7 +127,7 @@ export class Player {
       const vy = (input.jumpHeld ? 1 : 0) - (input.sprintDown ? 1 : 0);
       b.velocity.y = vy * 12;
     } else if (swim) {
-      b.velocity.y += (G.waterY + 0.1 - p.y) * 12 * dt;
+      b.velocity.y += (wl + 0.1 - p.y) * 12 * dt;
       b.velocity.y *= 1 - 1.5 * dt;
       if (input.jumpHeld) b.velocity.y = Math.max(b.velocity.y, 5);
     } else if (input.jump || (this.jumpBuf > 0 && this.grounded)) {
@@ -164,7 +165,7 @@ export class Player {
       cam = pivot.clone().addScaledVector(this.fwd, -this.camDist).addScaledVector(right, 0.8).add(new THREE.Vector3(0, 0.35, 0));
       const block = raycast(pivot, cam, GROUP.STATIC);
       if (block) cam = pivot.clone().lerp(block.point, Math.max(0, (block.dist - 0.3) / pivot.distanceTo(cam)));
-      if (p.y > G.waterY + 0.5) cam.y = Math.max(cam.y, G.waterY + 0.3);
+      if (p.y > wl + 0.5) cam.y = Math.max(cam.y, wl + 0.3);
     }
     if (G.shake > 0) {
       cam.add(new THREE.Vector3((Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4, (Math.random() - 0.5) * G.shake * 0.4));
